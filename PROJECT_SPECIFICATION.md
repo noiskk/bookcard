@@ -834,12 +834,12 @@ npm run dev    # http://localhost:5173
 | 7 | 삭제 확인 모달 없음 | `Library.jsx`에 커스텀 삭제 확인 모달 (책 제목 표시, 취소/삭제) | ✅ |
 | 8 | Library 전체 조회 (페이징 없음) | `getPagedBooks()` 연동, 12개씩 서버 페이지네이션 + 페이지 버튼 UI | ✅ |
 
-### 🔵 기술 부채 (여유 시 개선)
+### 🔵 기술 부채 — ✅ 전체 완료
 
-| # | 이슈 | 개선 방향 |
-|---|------|----------|
-| 9 | 네이버 검색 결과 캐싱 없음 | `@Cacheable` + Caffeine 또는 Redis |
-| 10 | 동시 생성 요청 시 같은 ISBN 중복 생성 가능 | DB unique 제약 + 낙관적 락 |
+| # | 이슈 | 개선 내용 | 상태 |
+|---|------|----------|:----:|
+| 9 | 네이버 검색 결과 캐싱 없음 | Caffeine `@Cacheable` (30분 TTL, 최대 200항목), `CacheConfig` 추가 | ✅ |
+| 10 | 동시 생성 시 같은 ISBN 중복 생성 가능 | `ConcurrentHashMap` ISBN 락 + SSE `DataIntegrityViolationException` → 기존 북카드 ID 반환 | ✅ |
 
 ---
 

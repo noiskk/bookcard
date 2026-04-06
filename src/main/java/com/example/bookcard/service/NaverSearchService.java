@@ -5,6 +5,7 @@ import com.example.bookcard.dto.NaverBookItem;
 import com.example.bookcard.dto.NaverSearchResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
@@ -35,6 +36,7 @@ public class NaverSearchService {
         this.restTemplate = new RestTemplate();
     }
 
+    @Cacheable(value = "naverSearch", key = "#query + '_' + #display + '_' + #start")
     public List<BookSearchResult> searchBooks(String query, int display, int start) {
         if (clientId.isEmpty() || clientSecret.isEmpty()) {
             log.warn("Naver API credentials not configured. Returning empty results.");
@@ -56,7 +58,7 @@ public class NaverSearchService {
 
             HttpEntity<String> entity = new HttpEntity<>(headers);
 
-            log.info("Searching Naver Books API for: {}", query);
+            log.info("Searching Naver Books API for: {} (display={}, start={})", query, display, start);
 
             ResponseEntity<NaverSearchResponse> response = restTemplate.exchange(
                     url,

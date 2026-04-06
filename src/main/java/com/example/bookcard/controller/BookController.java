@@ -10,6 +10,7 @@ import com.example.bookcard.service.BookService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -154,6 +155,33 @@ public class BookController {
                 emitter.send(SseEmitter.event()
                         .name("complete")
                         .data(objectMapper.writeValueAsString(completed)));
+                emitter.complete();
+
+            } catch (DataIntegrityViolationException e) {
+                // DB unique 제약 위반 — ISBN으로 기존 북카드를 조회해 중복 에러 메시지로 변환
+                log.warn("DataIntegrityViolation during SSE generation (isbn={}): {}",
+                        request.getIsbn(), e.getMessage());
+                try {
+                    String isbn = request.getIsbn();
+                    String message = "이미 존재하는 북카드입니다. 보관함에서 확인해주세요.";
+                    if (isbn != null && !isbn.isBlank()) {
+                        bookService.findByIsbn(isbn).ifPresent(existing ->
+                                { throw new RuntimeException(
+                                        "이미 생성된 북카드가 있습니다 (ID: " + existing.getId() + ")"); });
+                    }
+                    GenerationProgress error = GenerationProgress.error(message);
+                    emitter.send(SseEmitter.event()
+                            .name("error")
+                            .data(objectMapper.writeValueAsString(error)));
+                } catch (RuntimeException re) {
+                    // findByIsbn이 던진 RuntimeException — 그 메시지를 SSE로 전달
+                    try {
+                        GenerationProgress error = GenerationProgress.error(re.getMessage());
+                        emitter.send(SseEmitter.event()
+                                .name("error")
+                                .data(objectMapper.writeValueAsString(error)));
+                    } catch (IOException ignored) {}
+                } catch (IOException ignored) {}
                 emitter.complete();
 
             } catch (Exception e) {
