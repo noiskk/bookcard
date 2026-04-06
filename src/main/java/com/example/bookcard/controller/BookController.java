@@ -25,6 +25,23 @@ import java.io.IOException;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 
+/**
+ * 북카드 관련 REST API 컨트롤러
+ *
+ * 엔드포인트 목록:
+ * - GET  /api/books              전체 북카드 조회 (하위 호환)
+ * - GET  /api/books/paged        전체 북카드 페이지 조회
+ * - GET  /api/books/my           내 북카드 페이지 조회 (인증 필요)
+ * - GET  /api/books/{id}         특정 북카드 조회
+ * - GET  /api/books/recommendations  카테고리별 추천 도서
+ * - GET  /api/books/search       네이버 API 책 검색
+ * - GET  /api/books/library/search   보관함 내부 검색
+ * - POST /api/books/generate     북카드 생성 (동기)
+ * - POST /api/books/generate/stream  북카드 생성 (SSE 스트리밍)
+ * - DELETE /api/books/{id}       북카드 삭제
+ * - POST /api/books/{id}/like    좋아요 토글
+ * - GET  /api/books/{id}/like    좋아요 상태 조회
+ */
 @RestController
 @RequestMapping("/api/books")
 @RequiredArgsConstructor
@@ -33,10 +50,11 @@ public class BookController {
 
     private final BookService bookService;
     private final ObjectMapper objectMapper;
+    /** 비동기 SSE 작업용 스레드 풀 (AppConfig에서 빈 등록) */
     private final ExecutorService executor;
 
     /**
-     * Get all saved book cards (no pagination, for backward compatibility)
+     * 전체 북카드를 최신순으로 반환한다 (페이지네이션 없음, 하위 호환용).
      */
     @GetMapping
     public ResponseEntity<List<Book>> getAllBooks() {
@@ -44,7 +62,10 @@ public class BookController {
     }
 
     /**
-     * Get paged book cards
+     * 전체 북카드를 페이지네이션하여 반환한다.
+     *
+     * @param page 0 기반 페이지 번호 (기본값 0)
+     * @param size 페이지당 항목 수 (기본값 12)
      */
     @GetMapping("/paged")
     public ResponseEntity<Page<Book>> getPagedBooks(
@@ -54,7 +75,10 @@ public class BookController {
     }
 
     /**
-     * Get current user's book cards (authentication required)
+     * 현재 로그인한 사용자의 북카드만 페이지네이션하여 반환한다 (인증 필요).
+     *
+     * @param page 0 기반 페이지 번호 (기본값 0)
+     * @param size 페이지당 항목 수 (기본값 12)
      */
     @GetMapping("/my")
     public ResponseEntity<Page<Book>> getMyBooks(
@@ -64,7 +88,8 @@ public class BookController {
     }
 
     /**
-     * Get a specific book card by ID
+     * 특정 북카드를 ID로 조회한다.
+     * 존재하지 않으면 404를 반환한다.
      */
     @GetMapping("/{id}")
     public ResponseEntity<Book> getBookById(@PathVariable("id") Long id) {
@@ -74,8 +99,8 @@ public class BookController {
     }
 
     /**
-     * Get curated book recommendations by category
-     * Results are cached for 1 hour to avoid excessive Naver API calls
+     * 메인 페이지에 표시할 카테고리별 추천 도서 목록을 반환한다.
+     * 결과는 BookService 내부에서 1시간 캐시된다.
      */
     @GetMapping("/recommendations")
     public ResponseEntity<List<RecommendationCategory>> getRecommendations() {
@@ -85,10 +110,11 @@ public class BookController {
     }
 
     /**
-     * Search books from Naver API (external search)
-     * Used when user types in the search bar to find books to generate cards for
+     * 네이버 책 검색 API를 호출하여 검색 결과를 반환한다.
+     * 결과는 Caffeine 캐시(30분)에 저장되어 중복 요청 시 API를 재호출하지 않는다.
+     *
      * @param query 검색어
-     * @param start 시작 위치 (1부터 시작, 기본값 1)
+     * @param start 검색 시작 위치 (1부터, 페이지 로드마다 증가)
      */
     @GetMapping("/search")
     public ResponseEntity<List<BookSearchResult>> searchBooks(
@@ -100,7 +126,8 @@ public class BookController {
     }
 
     /**
-     * Search within saved library (internal search)
+     * 보관함(DB)에 저장된 북카드를 키워드로 검색한다.
+     * q 파라미터가 없으면 전체 목록을 반환한다.
      */
     @GetMapping("/library/search")
     public ResponseEntity<List<Book>> searchLibrary(@RequestParam(name = "q", required = false) String q) {
@@ -108,8 +135,8 @@ public class BookController {
     }
 
     /**
-     * Generate a new book card using AI (GPT + DALL-E)
-     * Called when user selects a book from search results
+     * 북카드를 AI로 생성한다 (동기 방식).
+     * 실시간 진행 상황이 필요 없는 환경에서 사용하는 단순 엔드포인트.
      */
     @PostMapping("/generate")
     public ResponseEntity<Book> generateBook(@RequestBody BookGenerateRequest request) {
@@ -119,22 +146,32 @@ public class BookController {
     }
 
     /**
-     * Generate a new book card with SSE progress updates
-     * Returns Server-Sent Events for real-time progress feedback
+     * 북카드를 SSE(Server-Sent Events) 스트리밍 방식으로 생성한다.
+     *
+     * 동작 방식:
+     * 1. SseEmitter를 즉시 반환하여 HTTP 연결을 유지한다.
+     * 2. 별도 스레드(executor)에서 북카드 생성을 비동기로 수행한다.
+     * 3. 각 단계 시작 시 "progress" 이벤트를 전송한다.
+     * 4. 완료 시 생성된 Book 객체를 담은 "complete" 이벤트를 전송한다.
+     * 5. ISBN 중복·DB 제약 위반·기타 오류 발생 시 "error" 이벤트를 전송한다.
+     *
+     * SecurityContext는 메인 스레드에서 복사하여 비동기 스레드에 주입한다.
+     * (Spring Security 기본 ThreadLocal은 스레드 간 전파되지 않으므로 직접 전달)
      */
     @PostMapping(value = "/generate/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter generateBookWithProgress(@RequestBody BookGenerateRequest request) {
         log.info("SSE Generate request received for: {} by {}", request.getTitle(), request.getAuthor());
 
-        // 5분 타임아웃 설정
+        // 5분 타임아웃 (GPT + Gemini 호출 합산 최대 ~21초를 고려한 여유 값)
         SseEmitter emitter = new SseEmitter(300000L);
 
+        // SecurityContext를 비동기 스레드에 전달하기 위해 현재 컨텍스트를 캡처
         SecurityContext securityContext = SecurityContextHolder.getContext();
 
         executor.execute(() -> {
             SecurityContextHolder.setContext(securityContext);
             try {
-                // 진행 상황 콜백
+                // 진행 상황 콜백: "단계번호:메시지" 형식 문자열을 받아 SSE 이벤트로 변환
                 Book generatedBook = bookService.generateBook(request, (progress) -> {
                     try {
                         String[] parts = progress.split(":", 2);
@@ -150,7 +187,7 @@ public class BookController {
                     }
                 });
 
-                // 완료 이벤트 전송
+                // 북카드 생성 완료 — Book 객체를 포함한 "complete" 이벤트 전송
                 GenerationProgress completed = GenerationProgress.completed(generatedBook);
                 emitter.send(SseEmitter.event()
                         .name("complete")
@@ -158,7 +195,7 @@ public class BookController {
                 emitter.complete();
 
             } catch (DataIntegrityViolationException e) {
-                // DB unique 제약 위반 — ISBN으로 기존 북카드를 조회해 중복 에러 메시지로 변환
+                // DB 유니크 제약 위반 (ISBN 중복) — 기존 북카드 ID를 조회하여 사용자 친화적 메시지로 변환
                 log.warn("DataIntegrityViolation during SSE generation (isbn={}): {}",
                         request.getIsbn(), e.getMessage());
                 try {
@@ -174,7 +211,7 @@ public class BookController {
                             .name("error")
                             .data(objectMapper.writeValueAsString(error)));
                 } catch (RuntimeException re) {
-                    // findByIsbn이 던진 RuntimeException — 그 메시지를 SSE로 전달
+                    // findByIsbn이 던진 RuntimeException — 그 메시지를 그대로 SSE error 이벤트로 전달
                     try {
                         GenerationProgress error = GenerationProgress.error(re.getMessage());
                         emitter.send(SseEmitter.event()
@@ -185,6 +222,7 @@ public class BookController {
                 emitter.complete();
 
             } catch (Exception e) {
+                // 그 외 예외 — 오류 메시지를 SSE error 이벤트로 전달
                 log.error("Error during SSE generation: {}", e.getMessage(), e);
                 try {
                     GenerationProgress error = GenerationProgress.error("북카드 생성에 실패했습니다: " + e.getMessage());
@@ -194,6 +232,7 @@ public class BookController {
                 } catch (IOException ignored) {}
                 emitter.completeWithError(e);
             } finally {
+                // 비동기 스레드의 SecurityContext를 반드시 정리
                 SecurityContextHolder.clearContext();
             }
         });
@@ -206,7 +245,9 @@ public class BookController {
     }
 
     /**
-     * Delete a book card from the library
+     * 북카드를 삭제한다.
+     * 본인이 생성한 북카드만 삭제 가능하며, 연결된 이미지 파일도 함께 삭제된다.
+     * 성공 시 204 No Content를 반환한다.
      */
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> deleteBook(@PathVariable("id") Long id) {
@@ -215,7 +256,8 @@ public class BookController {
     }
 
     /**
-     * Toggle like on a book card (like/unlike)
+     * 북카드에 좋아요를 토글한다 (이미 좋아요 → 취소, 미좋아요 → 추가).
+     * 토글 후 현재 likeCount와 liked 상태를 반환한다.
      */
     @PostMapping("/{id}/like")
     public ResponseEntity<LikeResponse> likeBook(@PathVariable("id") Long id) {
@@ -224,7 +266,8 @@ public class BookController {
     }
 
     /**
-     * Check if current user has liked a book
+     * 현재 로그인한 사용자의 특정 북카드 좋아요 여부를 조회한다.
+     * 비로그인 상태면 liked=false로 반환한다.
      */
     @GetMapping("/{id}/like")
     public ResponseEntity<LikeResponse> getLikeStatus(@PathVariable("id") Long id) {

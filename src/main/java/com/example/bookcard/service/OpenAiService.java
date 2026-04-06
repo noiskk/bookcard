@@ -18,11 +18,15 @@ import java.util.List;
 import java.util.function.Consumer;
 
 /**
- * OpenAI API 서비스 (Spring AI 기반) - 프롬프트 체이닝 적용
+ * AI 기반 북카드 콘텐츠 생성 서비스 (Spring AI + Gemini)
  *
- * 1단계: 책 분석 (장르, 분위기, 테마, 감정 추출)
- * 2단계: 분석 기반 한글 요약 생성
- * 3단계: 분석 + 요약 기반 이미지 프롬프트 생성 → DALL-E 호출
+ * 4단계 프롬프트 체이닝으로 북카드를 생성한다:
+ *   1단계: 책 분석 (장르·분위기·테마·감정 JSON 추출) — GPT-4o
+ *   2단계: 감성적 한글 요약 5문장 생성 — GPT-4o
+ *   3단계: 분석+요약 기반 이미지 프롬프트 생성 — GPT-4o
+ *   4단계: 이미지 생성 — Gemini 2.0 Flash (Image Generation)
+ *
+ * UserSettings 레코드로 사용자 커스텀 설정(스타일·길이·추가 지시)을 각 단계에 주입한다.
  */
 @Service
 @RequiredArgsConstructor
@@ -38,9 +42,12 @@ public class OpenAiService {
     @Value("${gemini.image.model:gemini-2.0-flash-preview-image-generation}")
     private String geminiImageModel;
 
+    /**
+     * OpenAI ChatClient 빈이 등록되어 있으면 설정된 것으로 간주한다.
+     * 헬스 체크나 초기화 확인에 사용된다.
+     */
     public boolean isConfigured() {
         try {
-            // ChatClient 빈이 등록되어 있으면 설정된 것으로 간주
             return chatClient != null;
         } catch (Exception e) {
             return false;
@@ -51,6 +58,16 @@ public class OpenAiService {
     // 1단계: 책 분석 (Book Analysis)
     // ========================================
 
+    /**
+     * 책 정보를 GPT-4o로 분석하여 장르·분위기·테마·감정 등을 추출한다.
+     * GPT가 해당 책을 알고 있으면 (knowledgeLevel=high) 제공된 소개 외에 자체 지식을 활용한다.
+     * 파싱 실패 시 기본값(createDefaultAnalysis)을 반환하여 전체 체이닝이 중단되지 않도록 한다.
+     *
+     * @param title       책 제목
+     * @param author      저자명
+     * @param description 네이버 API에서 받은 책 소개
+     * @return 분석 결과 BookAnalysis 객체
+     */
     public BookAnalysis analyzeBook(String title, String author, String description) {
         try {
             String systemPrompt = """
@@ -101,10 +118,23 @@ public class OpenAiService {
     // 2단계: 한글 요약 생성 (Korean Summary)
     // ========================================
 
+    /** 사용자 설정 없이 한글 요약을 생성한다 (기본 설정 사용). */
     public List<String> generateSummary(String title, String author, String description, BookAnalysis analysis) {
         return generateSummary(title, author, description, analysis, UserSettings.empty());
     }
 
+    /**
+     * 1단계 분석 결과와 사용자 설정을 바탕으로 감성적 한글 요약 문장들을 생성한다.
+     *
+     * 시스템 프롬프트는 다음 요소를 동적으로 조합한다:
+     * - buildLengthInstruction: 문장 수 (3·5·7개)
+     * - buildStyleInstruction: 문학적·시적·간결·스토리텔링 톤
+     * - buildCategoryStrategy: 장르별 글쓰기 전략 (시리즈 소설/에세이/시집 등)
+     * - buildKnowledgeInstruction: GPT 지식 수준에 따른 활용도 지시
+     * - buildCustomPromptInstruction: 사용자 커스텀 지시사항
+     *
+     * @param userSettings 사용자 설정 (요약 스타일·길이·커스텀 프롬프트)
+     */
     public List<String> generateSummary(String title, String author, String description, BookAnalysis analysis,
                                          UserSettings userSettings) {
         try {
@@ -187,6 +217,7 @@ public class OpenAiService {
         }
     }
 
+    /** 책 분석을 내부적으로 먼저 실행한 후 한글 요약을 생성하는 편의 메서드. */
     public List<String> generateSummary(String title, String author, String description) {
         BookAnalysis analysis = analyzeBook(title, author, description);
         return generateSummary(title, author, description, analysis);
@@ -196,6 +227,14 @@ public class OpenAiService {
     // 3단계: 이미지 프롬프트 생성
     // ========================================
 
+    /**
+     * 책 분석 결과와 한글 요약을 바탕으로 Gemini에 전달할 영어 이미지 프롬프트를 생성한다.
+     * 한국/동아시아 미학 감수성을 반영하며, 텍스트·글자 요소 없는 순수 이미지를 요구한다.
+     *
+     * @param analysis 1단계 책 분석 결과
+     * @param summary  2단계 한글 요약 문장들
+     * @return Gemini에 전달할 영어 이미지 프롬프트
+     */
     public String generateImagePrompt(String title, String author, BookAnalysis analysis, List<String> summary) {
         try {
             String systemPrompt = """
@@ -242,6 +281,7 @@ public class OpenAiService {
 
         } catch (Exception e) {
             log.error("Error generating image prompt: {}", e.getMessage(), e);
+            // 폴백: 범용 수채화 스타일 프롬프트
             return String.format(
                 "Artistic book cover illustration, dreamy watercolor style, soft pastel colors, " +
                 "abstract representation of literature and emotion, no text or letters, " +
@@ -251,16 +291,26 @@ public class OpenAiService {
     }
 
     // ========================================
-    // 4단계: 이미지 생성 (Gemini - Nano Banana)
+    // 4단계: 이미지 생성 (Gemini)
     // ========================================
 
+    /** 이미지 생성 결과를 담는 레코드 (바이트 배열 + MIME 타입). */
     public record ImageResult(byte[] data, String mimeType) {}
 
+    /**
+     * Gemini API로 이미지를 생성하고 바이트 배열로 반환한다.
+     * 안전 문구("No text, no letters...")를 프롬프트 뒤에 항상 추가한다.
+     * 실패 시 null을 반환하여 이미지 없이도 북카드 저장이 가능하도록 한다.
+     *
+     * @param imagePrompt 3단계에서 생성된 영어 이미지 프롬프트
+     * @return 이미지 바이트 + MIME 타입, 실패 시 null
+     */
     public ImageResult generateImage(String imagePrompt) {
         try (Client client = Client.builder()
                 .apiKey(geminiApiKey)
                 .build()) {
 
+            // 텍스트 생성 방지 안전 문구 추가
             String safePrompt = imagePrompt +
                     " No text, no letters, no words, no writing, no characters, no glyphs of any kind in the image.";
             GenerateContentResponse response = client.models.generateContent(
@@ -288,24 +338,42 @@ public class OpenAiService {
     // 전체 체이닝 실행 (Full Chain)
     // ========================================
 
-    // 사용자 설정값을 전달하기 위한 레코드
+    /**
+     * 사용자 설정값을 각 단계에 전달하기 위한 레코드.
+     *
+     * @param summaryStyle   요약 스타일: literary | poetic | concise | storytelling
+     * @param summaryLength  요약 길이: short(3문장) | medium(5문장) | long(7문장)
+     * @param defaultPrompt  사용자 커스텀 추가 지시사항
+     */
     public record UserSettings(String summaryStyle, String summaryLength, String defaultPrompt) {
+        /** 모든 설정이 null인 기본 설정을 반환한다. */
         public static UserSettings empty() {
             return new UserSettings(null, null, null);
         }
     }
 
+    /** 4단계 체이닝 실행 결과를 담는 레코드. */
     public record GenerationResult(BookAnalysis analysis, List<String> summary, ImageResult imageResult) {}
 
+    /** 콜백·설정 없이 전체 체이닝을 실행하는 편의 메서드. */
     public GenerationResult generateWithChaining(String title, String author, String description) {
         return generateWithChaining(title, author, description, null, null);
     }
 
+    /** 사용자 설정 없이 진행 콜백만 받아 전체 체이닝을 실행하는 편의 메서드. */
     public GenerationResult generateWithChaining(String title, String author, String description,
                                                   Consumer<String> progressCallback) {
         return generateWithChaining(title, author, description, progressCallback, null);
     }
 
+    /**
+     * 4단계 프롬프트 체이닝을 순서대로 실행한다.
+     * 각 단계 시작 시 progressCallback으로 SSE 이벤트를 전송한다 ("단계번호:메시지" 형식).
+     * 단계별 소요 시간과 전체 소요 시간을 INFO 로그로 기록한다.
+     *
+     * @param progressCallback 단계별 진행 상황 콜백 (null이면 무시)
+     * @param userSettings     사용자 설정값 (null이면 기본값 사용)
+     */
     public GenerationResult generateWithChaining(String title, String author, String description,
                                                   Consumer<String> progressCallback,
                                                   UserSettings userSettings) {
@@ -338,9 +406,13 @@ public class OpenAiService {
     }
 
     // ========================================
-    // Helper Methods
+    // 내부 헬퍼 메서드
     // ========================================
 
+    /**
+     * GPT 응답에서 JSON 코드 블록 마커(```json ... ```)를 제거하고 BookAnalysis로 역직렬화한다.
+     * 파싱 실패 시 기본값(createDefaultAnalysis)을 반환한다.
+     */
     private BookAnalysis parseBookAnalysis(String content) {
         try {
             content = content.replaceAll("```json\\s*", "").replaceAll("```\\s*", "").trim();
@@ -351,6 +423,10 @@ public class OpenAiService {
         }
     }
 
+    /**
+     * GPT 응답에서 JSON 배열 형태의 요약 문장을 파싱한다.
+     * JSON 파싱 실패 시 문장 부호(. ! ?)로 분리하는 폴백 로직을 적용한다.
+     */
     private List<String> parseSummaryJson(String content) {
         try {
             content = content.replaceAll("```json\\s*", "").replaceAll("```\\s*", "").trim();
@@ -364,6 +440,10 @@ public class OpenAiService {
         }
     }
 
+    /**
+     * 책 카테고리(bookCategory)에 따라 한글 요약 작성 전략을 지시하는 프롬프트 블록을 반환한다.
+     * 시리즈 소설, 에세이, 시집, 자기계발 등 카테고리별로 차별화된 글쓰기 가이드를 제공한다.
+     */
     private String buildCategoryStrategy(BookAnalysis analysis) {
         String category = analysis.getBookCategory() != null ? analysis.getBookCategory() : "";
         return switch (category) {
@@ -409,6 +489,10 @@ public class OpenAiService {
         };
     }
 
+    /**
+     * GPT의 책 지식 수준(knowledgeLevel)에 따라 요약 작성 시 자체 지식 활용 정도를 지시한다.
+     * high: 자체 지식 적극 활용 / medium: 혼합 / low: 제공된 소개만 활용
+     */
     private String buildKnowledgeInstruction(BookAnalysis analysis) {
         String level = analysis.getKnowledgeLevel() != null ? analysis.getKnowledgeLevel() : "low";
         return switch (level) {
@@ -418,6 +502,10 @@ public class OpenAiService {
         };
     }
 
+    /**
+     * 사용자가 선택한 요약 스타일(literary·poetic·concise·storytelling)에 따라
+     * 프롬프트에 삽입할 문체 지시 문자열을 반환한다.
+     */
     private String buildStyleInstruction(UserSettings settings) {
         if (settings == null || settings.summaryStyle() == null) return "";
         return switch (settings.summaryStyle()) {
@@ -429,6 +517,10 @@ public class OpenAiService {
         };
     }
 
+    /**
+     * 사용자가 선택한 요약 길이(short·medium·long)에 따라
+     * 생성할 문장 수를 지시하는 프롬프트 문자열을 반환한다.
+     */
     private String buildLengthInstruction(UserSettings settings) {
         if (settings == null || settings.summaryLength() == null) return "5개의 문장. 전체 흐름이 하나의 짧은 글처럼 읽혀야 합니다.";
         return switch (settings.summaryLength()) {
@@ -438,11 +530,16 @@ public class OpenAiService {
         };
     }
 
+    /**
+     * 사용자가 입력한 커스텀 프롬프트를 프롬프트에 삽입할 지시 문자열로 변환한다.
+     * 값이 없으면 빈 문자열을 반환한다.
+     */
     private String buildCustomPromptInstruction(UserSettings settings) {
         if (settings == null || settings.defaultPrompt() == null || settings.defaultPrompt().isBlank()) return "";
         return "★ 사용자 추가 지시: " + settings.defaultPrompt();
     }
 
+    /** 책 분석 API 호출 또는 파싱에 실패했을 때 사용할 기본 BookAnalysis 객체를 생성한다. */
     private BookAnalysis createDefaultAnalysis(String title) {
         return BookAnalysis.builder()
                 .genre("문학")
@@ -459,6 +556,7 @@ public class OpenAiService {
                 .build();
     }
 
+    /** 요약 생성에 실패했을 때 반환하는 범용 폴백 요약 문장 목록. */
     private List<String> generateMockSummary(String title, String author) {
         return Arrays.asList(
             String.format("<%s>이 펼쳐내는 특별한 이야기가 시작된다.", title),
