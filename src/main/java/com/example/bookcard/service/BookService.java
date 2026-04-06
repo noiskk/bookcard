@@ -1,0 +1,212 @@
+package com.example.bookcard.service;
+
+import com.example.bookcard.dto.BookGenerateRequest;
+import com.example.bookcard.dto.BookSearchResult;
+import com.example.bookcard.dto.RecommendationCategory;
+import com.example.bookcard.entity.Book;
+import com.example.bookcard.entity.User;
+import com.example.bookcard.repository.BookRepository;
+import com.example.bookcard.repository.UserRepository;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Consumer;
+
+@Service
+@RequiredArgsConstructor
+@Slf4j
+public class BookService {
+
+    private static final long CACHE_TTL_MS = 60 * 60 * 1000L; // 1 hour
+
+    private static final int RECOMMENDATIONS_PER_CATEGORY = 6;
+    private static final Map<String, String[]> CATEGORY_QUERIES = new LinkedHashMap<>();
+
+    static {
+        CATEGORY_QUERIES.put("소설",        new String[]{"소설", "한국소설 추천"});
+        CATEGORY_QUERIES.put("에세이",      new String[]{"에세이", "에세이 추천"});
+        CATEGORY_QUERIES.put("자기계발",    new String[]{"자기계발", "자기계발 베스트"});
+        CATEGORY_QUERIES.put("인문학",      new String[]{"인문학", "인문학 교양"});
+    }
+
+    // Simple in-memory cache: category key -> cached result + timestamp
+    private final ConcurrentHashMap<String, Object[]> recommendationCache = new ConcurrentHashMap<>();
+    // Sentinel key for the whole recommendations list
+    private static final String CACHE_KEY = "recommendations";
+
+    private final BookRepository bookRepository;
+    private final UserRepository userRepository;
+    private final NaverSearchService naverSearchService;
+    private final OpenAiService openAiService;
+    private final ImageStorageService imageStorageService;
+
+    private User getCurrentUser() {
+        String email = SecurityContextHolder.getContext().getAuthentication().getName();
+        return userRepository.findByEmail(email)
+                .orElseThrow(() -> new IllegalStateException("인증된 사용자를 찾을 수 없습니다"));
+    }
+
+    @Transactional(readOnly = true)
+    public List<Book> getAllBooks() {
+        return bookRepository.findAllByOrderByCreatedAtDesc();
+    }
+
+    @Transactional(readOnly = true)
+    public Optional<Book> getBookById(Long id) {
+        return bookRepository.findById(id);
+    }
+
+    @Transactional(readOnly = true)
+    public Page<Book> getPagedBooks(Pageable pageable) {
+        return bookRepository.findAllByOrderByCreatedAtDesc(pageable);
+    }
+
+    @Transactional(readOnly = true)
+    public List<Book> searchBooksInLibrary(String keyword) {
+        if (keyword == null || keyword.trim().isEmpty()) {
+            return getAllBooks();
+        }
+        return bookRepository.searchByKeyword(keyword.trim());
+    }
+
+    public List<BookSearchResult> searchBooksFromNaver(String query) {
+        return searchBooksFromNaver(query, 1);
+    }
+
+    public List<BookSearchResult> searchBooksFromNaver(String query, int start) {
+        return naverSearchService.searchBooks(query, 20, start);
+    }
+
+    @SuppressWarnings("unchecked")
+    public List<RecommendationCategory> getRecommendations() {
+        // Return from cache if still valid
+        Object[] cached = recommendationCache.get(CACHE_KEY);
+        if (cached != null) {
+            long cachedAt = (long) cached[1];
+            if (Instant.now().toEpochMilli() - cachedAt < CACHE_TTL_MS) {
+                log.debug("Returning recommendations from cache");
+                return (List<RecommendationCategory>) cached[0];
+            }
+        }
+
+        log.info("Fetching fresh recommendations from Naver API");
+        List<RecommendationCategory> result = new ArrayList<>();
+
+        for (Map.Entry<String, String[]> entry : CATEGORY_QUERIES.entrySet()) {
+            String displayName = entry.getKey();
+            String[] queries = entry.getValue();
+            String searchQuery = queries[1];
+
+            List<BookSearchResult> books = naverSearchService.searchBooks(
+                    searchQuery, RECOMMENDATIONS_PER_CATEGORY, 1);
+
+            result.add(RecommendationCategory.builder()
+                    .category(displayName)
+                    .displayName(displayName)
+                    .books(books)
+                    .build());
+
+            log.info("Fetched {} books for category '{}'", books.size(), displayName);
+        }
+
+        // Store in cache
+        recommendationCache.put(CACHE_KEY, new Object[]{result, Instant.now().toEpochMilli()});
+
+        return result;
+    }
+
+    @Transactional
+    public Book generateBook(BookGenerateRequest request) {
+        return generateBook(request, null);
+    }
+
+    @Transactional
+    public Book generateBook(BookGenerateRequest request, Consumer<String> progressCallback) {
+        log.info("Generating book card for: {} by {}", request.getTitle(), request.getAuthor());
+
+        // ISBN 중복 체크
+        if (request.getIsbn() != null && !request.getIsbn().isBlank()) {
+            bookRepository.findByIsbn(request.getIsbn()).ifPresent(existing -> {
+                throw new IllegalArgumentException("이미 생성된 북카드가 있습니다 (ID: " + existing.getId() + ")");
+            });
+        }
+
+        String title = request.getTitle();
+        String author = request.getAuthor();
+        String description = request.getDescription();
+
+        // 프롬프트 체이닝 실행 (1단계 → 2단계 → 3단계 → 4단계)
+        OpenAiService.GenerationResult result = openAiService.generateWithChaining(
+                title, author, description, progressCallback);
+
+        // 이미지를 로컬에 저장
+        if (progressCallback != null) {
+            progressCallback.accept("5:이미지를 저장하고 있습니다...");
+        }
+        String generatedImage = null;
+        if (result.imageResult() != null) {
+            generatedImage = imageStorageService.saveBase64Image(
+                    java.util.Base64.getEncoder().encodeToString(result.imageResult().data()),
+                    result.imageResult().mimeType());
+        }
+
+        Book book = Book.builder()
+                .isbn(request.getIsbn())
+                .title(title)
+                .author(author)
+                .publisher(request.getPublisher())
+                .originalImage(request.getOriginalImage())
+                .generatedImage(generatedImage)
+                .description(description)
+                .summary(result.summary())
+                .creator(getCurrentUser())
+                .build();
+
+        Book savedBook = bookRepository.save(book);
+        log.info("Book card created with ID: {}", savedBook.getId());
+
+        return savedBook;
+    }
+
+    @Transactional
+    public void deleteBook(Long id) {
+        Book book = bookRepository.findById(id)
+                .orElseThrow(() -> new IllegalArgumentException("북카드를 찾을 수 없습니다: " + id));
+
+        User currentUser = getCurrentUser();
+        if (book.getCreator() != null && !book.getCreator().getId().equals(currentUser.getId())) {
+            throw new org.springframework.security.access.AccessDeniedException("본인이 생성한 북카드만 삭제할 수 있습니다");
+        }
+
+        if (book.getGeneratedImage() != null) {
+            imageStorageService.delete(book.getGeneratedImage());
+        }
+        bookRepository.deleteById(id);
+        log.info("Deleted book with ID: {}", id);
+    }
+
+    @Transactional(readOnly = true)
+    public Optional<Book> findByIsbn(String isbn) {
+        return bookRepository.findByIsbn(isbn);
+    }
+
+    @Transactional
+    public Book likeBook(Long id) {
+        bookRepository.incrementLikeCount(id); // DB에서 원자적으로 +1
+        return bookRepository.findById(id)
+                .orElseThrow(() -> new RuntimeException("Book not found: " + id));
+    }
+}
