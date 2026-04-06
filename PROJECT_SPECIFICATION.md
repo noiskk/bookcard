@@ -43,9 +43,14 @@
 | 라이브러리 | 전체 북카드 조회·검색·삭제 | ✅ |
 | 북카드 공유 | URL 기반 공유 링크 생성 | ✅ |
 | 회원가입/로그인 | JWT 기반 인증 | ✅ |
-| 좋아요 | 북카드 좋아요 (중복 방지 미구현) | ⚠️ |
-| Settings | AI 생성 스타일 설정 (AI 미반영) | ⚠️ |
-| 내 북카드 탭 | 로그인 사용자 본인 북카드 필터 | ⚠️ |
+| 좋아요 | 북카드 좋아요 토글 (중복 방지) | ✅ |
+| Settings | AI 생성 스타일 설정 반영 | ✅ |
+| 내 북카드 탭 | 서버 연동 (GET /api/books/my) | ✅ |
+| 로그인 상태 표시 | 헤더에 닉네임 + 로그아웃 버튼 | ✅ |
+| 비로그인 가드 | 생성 시도 시 로그인 페이지 리다이렉트 | ✅ |
+| 토큰 만료 처리 | 401 응답 시 자동 로그아웃 | ✅ |
+| 삭제 확인 모달 | 커스텀 모달로 삭제 확인 | ✅ |
+| 페이지네이션 | Library 서버 페이지네이션 연동 | ✅ |
 
 ---
 
@@ -202,15 +207,15 @@ bookcard/
 │   │   │   ├── BookCard.jsx
 │   │   │   ├── BookViewer.jsx                  # 풀스크린, 키보드 네비, Ken Burns
 │   │   │   ├── GenerateModal.jsx
-│   │   │   ├── Layout.jsx                      # ⚠️ 로그인 상태 표시 미구현
+│   │   │   ├── Layout.jsx                      # 닉네임 표시 + 로그아웃
 │   │   │   └── SearchBar.jsx
 │   │   ├── pages/
 │   │   │   ├── BookShare.jsx
-│   │   │   ├── Library.jsx                     # ⚠️ 내가 만든 탭: localStorage 기반
+│   │   │   ├── Library.jsx                     # 서버 페이지네이션 + 삭제 모달
 │   │   │   ├── Login.jsx
-│   │   │   ├── Main.jsx
+│   │   │   ├── Main.jsx                        # 비로그인 가드
 │   │   │   ├── Register.jsx
-│   │   │   └── Settings.jsx                    # ⚠️ AI 생성에 미반영
+│   │   │   └── Settings.jsx                    # AI 생성에 반영됨
 │   │   └── utils/
 │   │       └── myBooks.js
 │   ├── package.json
@@ -491,10 +496,9 @@ data: {"step":4,"status":"completed","message":"완료!","data":{/* Book 객체 
 **Response 403** — 본인이 생성하지 않은 북카드 `{ "message": "본인이 생성한 북카드만 삭제할 수 있습니다" }`
 **Response 400** — 존재하지 않는 ID
 
-#### POST /api/books/{id}/like — 좋아요
+#### POST /api/books/{id}/like — 좋아요 토글
 **인증 필요**
-**Response 200** — likeCount가 1 증가한 Book 객체
-**⚠️ 현재 중복 클릭 방지 없음** — 동일 사용자 무한 클릭 가능
+**Response 200** — `{ "liked": true/false, "likeCount": N }` (BookLike 엔티티 기반 토글)
 
 ### 6.3 공통 에러 응답
 
@@ -660,35 +664,13 @@ likeBook(id)
 - SSE 연결 및 진행률 표시
 - 단계별 메시지 표시
 
-### 8.4 ⚠️ 미구현 — AuthContext
+### 8.4 인증 상태 관리
 
-현재 인증 상태를 전역으로 관리하는 Context가 없음.
-각 컴포넌트가 `authApi.getToken()`을 직접 호출하는 방식으로 동작 중.
-
-**구현해야 할 AuthContext 구조**
-```javascript
-// contexts/AuthContext.jsx
-export function AuthProvider({ children }) {
-  const [user, setUser] = useState(null); // { email, nickname }
-
-  const login = async (email, password) => {
-    const res = await authApi.login(email, password);
-    setUser({ email: res.email, nickname: res.nickname });
-  };
-
-  const logout = () => {
-    authApi.logout();
-    setUser(null);
-    navigate('/login');
-  };
-
-  return (
-    <AuthContext.Provider value={{ user, login, logout, isLoggedIn: !!user }}>
-      {children}
-    </AuthContext.Provider>
-  );
-}
-```
+AuthContext 대신 `authApi` 유틸리티 + localStorage 방식으로 구현.
+- 로그인/회원가입 시 JWT 토큰과 닉네임을 localStorage에 저장
+- `Layout.jsx`에서 닉네임 표시, 로그아웃 시 localStorage 클리어
+- `bookApi.js`에서 401 응답 인터셉트 → 자동 로그아웃 + `/login` 리다이렉트
+- `Main.jsx`에서 비로그인 생성 시도 시 `/login` 리다이렉트
 
 ---
 
@@ -834,23 +816,23 @@ npm run dev    # http://localhost:5173
 
 ## 11. 알려진 이슈 및 개선 로드맵
 
-### 🔴 우선순위 높음 (면접 지적 가능성 높음)
+### 🔴 우선순위 높음 (면접 지적 가능성 높음) — ✅ 전체 완료
 
-| # | 이슈 | 위치 | 개선 방향 |
-|---|------|------|----------|
-| 1 | Settings 페이지가 localStorage에만 저장됨 — AI 생성 요청에 미반영 (데드 UI) | `Settings.jsx`, `BookGenerateRequest` | 설정값을 generate 요청에 포함, 백엔드에서 시스템 프롬프트에 반영 |
-| 2 | 좋아요 중복 방지 없음 — 동일 사용자 무한 클릭 가능 | `BookService.likeBook()` | `book_likes` 테이블 추가 또는 Redis Set으로 중복 체크 |
-| 3 | "내가 만든 북카드" 탭이 localStorage 기반 — 서버 creator 필드와 미연동 | `Library.jsx`, `BookRepository` | `GET /api/books/my` 엔드포인트 추가, `findByCreator()` |
+| # | 이슈 | 개선 내용 | 상태 |
+|---|------|----------|:----:|
+| 1 | Settings AI 미반영 (데드 UI) | generate 요청에 설정값 포함, 백엔드 프롬프트 커스터마이징 | ✅ |
+| 2 | 좋아요 중복 방지 없음 | `BookLike` 엔티티 + 토글 방식, likeCount 실제 카운트 동기화 | ✅ |
+| 3 | 내 북카드 탭 localStorage 기반 | `GET /api/books/my` 서버 연동, 페이지네이션 | ✅ |
 
-### 🟡 우선순위 중간 (UX 완성도)
+### 🟡 우선순위 중간 (UX 완성도) — ✅ 전체 완료
 
-| # | 이슈 | 위치 | 개선 방향 |
-|---|------|------|----------|
-| 4 | 비로그인 사용자가 생성 시도 시 401 에러 노출 | `Main.jsx`, `bookApi.js` | `isLoggedIn()` 체크 후 `/login`으로 리다이렉트 |
-| 5 | 헤더에 로그인/로그아웃 상태 표시 없음 | `Layout.jsx` | AuthContext 구현 후 사용자 닉네임 + 로그아웃 버튼 |
-| 6 | 토큰 만료 처리 없음 | `bookApi.js` | 401 응답 시 자동 로그아웃 + 로그인 페이지 이동 |
-| 7 | 삭제 확인 모달 없음 | `Library.jsx` | "정말 삭제하시겠습니까?" confirm 다이얼로그 |
-| 8 | Library 페이지가 `getAllBooks()` 사용 — 전체 조회 | `Library.jsx` | `/api/books/paged` 연동, 무한스크롤 또는 페이지 버튼 |
+| # | 이슈 | 개선 내용 | 상태 |
+|---|------|----------|:----:|
+| 4 | 비로그인 생성 시도 시 401 에러 | `Main.jsx`에서 `isLoggedIn()` 체크 → `/login` 리다이렉트 | ✅ |
+| 5 | 헤더 로그인 상태 표시 없음 | `Layout.jsx`에 닉네임 표시 (localStorage 저장), 로그아웃 버튼 | ✅ |
+| 6 | 토큰 만료 처리 없음 | `bookApi.js`에 401 인터셉터 → 자동 로그아웃 + `/login` 이동 | ✅ |
+| 7 | 삭제 확인 모달 없음 | `Library.jsx`에 커스텀 삭제 확인 모달 (책 제목 표시, 취소/삭제) | ✅ |
+| 8 | Library 전체 조회 (페이징 없음) | `getPagedBooks()` 연동, 12개씩 서버 페이지네이션 + 페이지 버튼 UI | ✅ |
 
 ### 🔵 기술 부채 (여유 시 개선)
 

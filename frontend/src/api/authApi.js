@@ -1,6 +1,7 @@
 const API_BASE_URL = 'http://localhost:8080/api';
 
 const TOKEN_KEY = 'bookcard_token';
+const NICKNAME_KEY = 'bookcard_nickname';
 
 export const authApi = {
   async register({ email, password, nickname }) {
@@ -20,6 +21,7 @@ export const authApi = {
 
     const data = await response.json();
     localStorage.setItem(TOKEN_KEY, data.token);
+    if (data.nickname) localStorage.setItem(NICKNAME_KEY, data.nickname);
     return data;
   },
 
@@ -39,11 +41,20 @@ export const authApi = {
 
     const data = await response.json();
     localStorage.setItem(TOKEN_KEY, data.token);
+    if (data.nickname) localStorage.setItem(NICKNAME_KEY, data.nickname);
     return data;
   },
 
   logout() {
     localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(NICKNAME_KEY);
+  },
+
+  // 401 응답 시 호출 — 토큰 제거 후 로그인 페이지로 이동
+  forceLogout() {
+    localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(NICKNAME_KEY);
+    window.location.href = '/login';
   },
 
   getToken() {
@@ -71,6 +82,11 @@ export const authApi = {
     } catch {
       return null;
     }
+  },
+
+  // 로그인 시 저장한 닉네임 반환
+  getNickname() {
+    return localStorage.getItem(NICKNAME_KEY);
   },
 };
 

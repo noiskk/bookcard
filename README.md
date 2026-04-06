@@ -99,15 +99,22 @@ Gemini가 그 분위기에 맞는 커버 이미지를 생성하고, 하나의 �
 WebSocket 대신 SSE를 선택한 이유: 서버→클라이언트 **단방향** 통신으로 충분하며,
 HTTP 기반이라 방화벽에 친화적입니다.
 
-### JWT 인증
+### JWT 인증 + UX 보호
 
 - 회원가입/로그인 시 JWT 발급 (유효기간 24시간, HS384)
 - `JwtAuthFilter`가 모든 요청의 `Authorization: Bearer` 헤더를 검증
 - 비회원도 북카드 조회·검색 가능 / 생성·삭제·좋아요는 인증 필요
+- **비로그인 생성 시도** → `/login`으로 즉시 리다이렉트 (401 에러 노출 방지)
+- **토큰 만료 시** → 401 인터셉터가 자동 로그아웃 후 로그인 페이지 이동
+- **헤더 닉네임 표시** → 로그인 상태를 헤더에서 즉시 확인 가능
+
+### 좋아요 — 중복 방지 토글
+
+- `book_likes` 테이블에 `(book_id, user_id)` 복합 유니크 제약으로 중복 방지
+- 동일 사용자가 다시 누르면 취소 (토글), `likeCount`는 실제 레코드 수로 동기화
 
 ### 동시성 처리
 
-- **좋아요 Lost Update**: `@Transactional` + `SELECT ... FOR UPDATE`
 - **ISBN 중복 생성**: DB UNIQUE 제약 + 애플리케이션 레벨 중복 체크
 - **SSE 스레드풀**: `CachedThreadPool` + 비동기 스레드에 SecurityContext 전파
 
@@ -178,7 +185,7 @@ com.example.bookcard/
 ├── controller/   # REST 엔드포인트
 ├── service/      # 비즈니스 로직 · 트랜잭션 경계
 ├── repository/   # JPA Repository
-├── entity/       # Book · User
+├── entity/       # Book · User · BookLike
 └── dto/          # 요청/응답 DTO
 ```
 
@@ -251,13 +258,15 @@ open build/reports/jacoco/test/html/index.html
 |--------|----------|:----:|------|
 | `POST` | `/api/auth/register` | ❌ | 회원가입 |
 | `POST` | `/api/auth/login` | ❌ | 로그인 |
-| `GET` | `/api/books/paged` | ❌ | 북카드 페이지 조회 |
+| `GET` | `/api/books/paged` | ❌ | 북카드 페이지 조회 (12개/페이지) |
+| `GET` | `/api/books/my` | ✅ | 내 북카드 조회 (페이지네이션) |
 | `GET` | `/api/books/search` | ❌ | 네이버 도서 검색 |
 | `GET` | `/api/books/{id}` | ❌ | 북카드 단건 조회 |
 | `POST` | `/api/books/generate` | ✅ | 북카드 생성 (동기) |
 | `POST` | `/api/books/generate/stream` | ✅ | 북카드 생성 (SSE) |
-| `DELETE` | `/api/books/{id}` | ✅ | 북카드 삭제 |
-| `POST` | `/api/books/{id}/like` | ✅ | 좋아요 |
+| `DELETE` | `/api/books/{id}` | ✅ | 북카드 삭제 (본인만) |
+| `POST` | `/api/books/{id}/like` | ✅ | 좋아요 토글 |
+| `GET` | `/api/books/{id}/like` | ✅ | 좋아요 상태 조회 |
 
 ---
 
@@ -301,14 +310,11 @@ SSE로 단계별 진행 상황을 실시간 전달해 대기 경험을 개선했
 
 ---
 
-## ⚠️ 알려진 이슈
+## 🔵 기술 부채 (잔여)
 
 자세한 내용은 [PROJECT_SPECIFICATION.md — 개선 로드맵](./PROJECT_SPECIFICATION.md#11-알려진-이슈-및-개선-로드맵) 참고
 
-| 우선순위 | 이슈 |
-|:--------:|------|
-| 🔴 | Settings 페이지 설정이 AI 생성에 미반영 (데드 UI) |
-| 🔴 | 좋아요 중복 방지 없음 |
-| 🔴 | "내가 만든 북카드" 탭이 localStorage 기반 (서버 미연동) |
-| 🟡 | AuthContext 미구현 (컴포넌트마다 직접 토큰 조회) |
-| 🟡 | 토큰 만료 시 자동 로그아웃 없음 |
+| 이슈 | 개선 방향 |
+|------|----------|
+| 네이버 검색 결과 캐싱 없음 | `@Cacheable` + Caffeine 또는 Redis |
+| 동시 생성 시 같은 ISBN 중복 가능 | DB unique 제약 + 낙관적 락 |

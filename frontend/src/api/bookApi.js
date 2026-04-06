@@ -27,6 +27,16 @@ const getAuthHeader = () => {
   return token ? { Authorization: `Bearer ${token}` } : {};
 };
 
+// 401 응답 처리 — 토큰 만료 시 자동 로그아웃
+const handleUnauthorized = (response) => {
+  if (response.status === 401) {
+    localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem('bookcard_nickname');
+    window.location.href = '/login';
+    throw new Error('로그인이 만료되었습니다. 다시 로그인해주세요.');
+  }
+};
+
 // 이미지 URL을 전체 경로로 변환
 const resolveImageUrl = (url) => {
   if (!url) return null;
@@ -78,6 +88,17 @@ export const bookApi = {
     return books.map(resolveBookImages);
   },
 
+  // Get paged books from library
+  async getPagedBooks(page = 0, size = 12) {
+    const response = await fetch(`${API_BASE_URL}/books/paged?page=${page}&size=${size}`);
+    if (!response.ok) throw new Error('Failed to fetch books');
+    const data = await response.json();
+    return {
+      ...data,
+      content: data.content.map(resolveBookImages),
+    };
+  },
+
   // Generate a new book card using AI
   async generateBook(bookData) {
     const settings = getUserSettings();
@@ -97,6 +118,7 @@ export const bookApi = {
         ...settings,
       }),
     });
+    handleUnauthorized(response);
     if (!response.ok) throw new Error('Failed to generate book card');
     const book = await response.json();
     return resolveBookImages(book);
@@ -125,6 +147,12 @@ export const bookApi = {
       },
       body: body,
     }).then(response => {
+      if (response.status === 401) {
+        localStorage.removeItem(TOKEN_KEY);
+        localStorage.removeItem('bookcard_nickname');
+        window.location.href = '/login';
+        throw new Error('로그인이 만료되었습니다.');
+      }
       if (!response.ok) {
         throw new Error('Failed to start generation');
       }
@@ -179,6 +207,7 @@ export const bookApi = {
         ...getAuthHeader(),
       },
     });
+    handleUnauthorized(response);
     if (!response.ok) throw new Error('Failed to fetch my books');
     const data = await response.json();
     return {
@@ -202,6 +231,7 @@ export const bookApi = {
         ...getAuthHeader(),
       },
     });
+    handleUnauthorized(response);
     if (!response.ok) throw new Error('Failed to delete book');
   },
 
@@ -213,6 +243,7 @@ export const bookApi = {
         ...getAuthHeader(),
       },
     });
+    handleUnauthorized(response);
     if (!response.ok) throw new Error('Failed to like book');
     return await response.json();
   },
@@ -224,6 +255,7 @@ export const bookApi = {
         ...getAuthHeader(),
       },
     });
+    handleUnauthorized(response);
     if (!response.ok) throw new Error('Failed to get like status');
     return await response.json();
   },

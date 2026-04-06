@@ -1,11 +1,14 @@
 import { useState, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { Search, Sparkles, BookOpen, Loader2, X, ArrowRight, TrendingUp, HelpCircle } from 'lucide-react'
 import BookViewer from '../components/BookViewer'
 import SearchModal from '../components/SearchModal'
 import bookApi from '../api/bookApi'
+import authApi from '../api/authApi'
 import myBooks from '../utils/myBooks'
 
 function Main() {
+  const navigate = useNavigate()
   const [isGenerating, setIsGenerating] = useState(false)
   const [selectedBook, setSelectedBook] = useState(null)
   const [generatedBook, setGeneratedBook] = useState(null)
@@ -47,6 +50,10 @@ function Main() {
 
   // Generate book card when user selects a book (with SSE progress)
   const handleSelectBook = (book) => {
+    if (!authApi.isLoggedIn()) {
+      navigate('/login')
+      return
+    }
     setSelectedBook(book)
     setIsGenerating(true)
     setError(null)

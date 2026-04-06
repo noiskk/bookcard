@@ -50,10 +50,15 @@ function Layout() {
                 <span className="hidden sm:inline">설정</span>
               </NavLink>
               {isLoggedIn ? (
-                <button onClick={handleLogout} className="flex items-center gap-2 px-4 py-2 rounded-lg text-stone-600 hover:bg-stone-200 hover:text-stone-800 transition-colors duration-200">
-                  <LogOut className="w-4 h-4" />
-                  <span className="hidden sm:inline">로그아웃</span>
-                </button>
+                <div className="flex items-center gap-1">
+                  <span className="hidden sm:inline text-sm text-stone-600 px-2">
+                    {authApi.getNickname() || authApi.getCurrentUserEmail()}님
+                  </span>
+                  <button onClick={handleLogout} className="flex items-center gap-2 px-4 py-2 rounded-lg text-stone-600 hover:bg-stone-200 hover:text-stone-800 transition-colors duration-200">
+                    <LogOut className="w-4 h-4" />
+                    <span className="hidden sm:inline">로그아웃</span>
+                  </button>
+                </div>
               ) : (
                 <NavLink to="/login" className={navLinkClass}>
                   <LogIn className="w-4 h-4" />
