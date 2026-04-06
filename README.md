@@ -26,9 +26,17 @@ Gemini가 그 분위기에 맞는 커버 이미지를 생성하고, 하나의 �
   <tr>
     <td align="center" width="33%">
       <img src="docs/images/example-채식주의자.png" width="220" alt="채식주의자 북카드"/>
-      <br/><br/>
-      <b>채식주의자</b> · 한강
-      <br/><br/>
+    </td>
+    <td align="center" width="33%">
+      <img src="docs/images/example-작별하지않는다.png" width="220" alt="작별하지 않는다 북카드"/>
+    </td>
+    <td align="center" width="33%">
+      <img src="docs/images/example-해리포터비밀의방.png" width="220" alt="해리포터 비밀의 방 북카드"/>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" valign="top">
+      <b>채식주의자</b> · 한강<br/><br/>
       <i>
         육체를 거부하는 순간, 그녀의 세계는 산산이 부서졌다.<br/>
         왜 우리는 폭력을 당연히 받아들이는 걸까?<br/>
@@ -38,11 +46,8 @@ Gemini가 그 분위기에 맞는 커버 이미지를 생성하고, 하나의 �
         그리고 다시, 처음처럼.
       </i>
     </td>
-    <td align="center" width="33%">
-      <img src="docs/images/example-작별하지않는다.png" width="220" alt="작별하지 않는다 북카드"/>
-      <br/><br/>
-      <b>작별하지 않는다</b> · 한강
-      <br/><br/>
+    <td align="center" valign="top">
+      <b>작별하지 않는다</b> · 한강<br/><br/>
       <i>
         사랑은 불타오르는 기억 속에서도 희미해지지 않는다.<br/>
         한강의 문장은 차가운 눈 속에 숨겨진 따뜻한 불꽃과 같다.<br/>
@@ -52,11 +57,8 @@ Gemini가 그 분위기에 맞는 커버 이미지를 생성하고, 하나의 �
         그리고 다시, 처음처럼.
       </i>
     </td>
-    <td align="center" width="33%">
-      <img src="docs/images/example-해리포터비밀의방.png" width="220" alt="해리포터 비밀의 방 북카드"/>
-      <br/><br/>
-      <b>해리 포터와 비밀의 방</b> · J.K. 롤링
-      <br/><br/>
+    <td align="center" valign="top">
+      <b>해리 포터와 비밀의 방</b> · J.K. 롤링<br/><br/>
       <i>
         비밀의 방이 열렸다. 이젠 해리의 차례다.<br/>
         믿었던 그가 적이라면,<br/>
@@ -308,13 +310,3 @@ SSE로 단계별 진행 상황을 실시간 전달해 대기 경험을 개선했
 | [DEVELOPMENT_GUIDE.md](./DEVELOPMENT_GUIDE.md) | 개발 순서 및 구현 가이드 |
 | [GitHub Wiki](https://github.com/noiskk/bookcard/wiki) | 마이그레이션 배경 · 핵심 기능 · 성능 분석 |
 
----
-
-## 🔵 기술 부채 (잔여)
-
-자세한 내용은 [PROJECT_SPECIFICATION.md — 개선 로드맵](./PROJECT_SPECIFICATION.md#11-알려진-이슈-및-개선-로드맵) 참고
-
-| 이슈 | 개선 방향 |
-|------|----------|
-| 네이버 검색 결과 캐싱 없음 | `@Cacheable` + Caffeine 또는 Redis |
-| 동시 생성 시 같은 ISBN 중복 가능 | DB unique 제약 + 낙관적 락 |
