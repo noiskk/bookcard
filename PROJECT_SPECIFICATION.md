@@ -30,7 +30,7 @@
 
 ### 1.3 핵심 가치
 - 책의 핵심을 **한국어 5줄 요약**으로 압축 전달
-- **DALL-E 3** 기반 아트워크로 책의 분위기를 시각화
+- **Gemini** 기반 아트워크로 책의 분위기를 시각화
 - 생성된 북카드를 **라이브러리에 저장·관리·공유**
 
 ### 1.4 주요 기능 현황
@@ -38,7 +38,7 @@
 | 기능 | 설명 | 구현 상태 |
 |------|------|:---------:|
 | 도서 검색 | 네이버 도서 API 기반 실시간 검색 | ✅ |
-| AI 북카드 생성 | GPT-4o 분석 + DALL-E 3 이미지 생성 | ✅ |
+| AI 북카드 생성 | GPT-4o 분석 + Gemini 이미지 생성 | ✅ |
 | SSE 진행 상황 | 생성 중 실시간 단계별 진행률 표시 | ✅ |
 | 라이브러리 | 전체 북카드 조회·검색·삭제 | ✅ |
 | 북카드 공유 | URL 기반 공유 링크 생성 | ✅ |
@@ -59,6 +59,8 @@
 | Spring Boot | 3.5.9 | 국내 금융·엔터프라이즈 표준 프레임워크 |
 | Spring Data JPA | - | SQL 직접 작성 없이 CRUD 처리, N+1 문제 제어 |
 | Spring Security | - | 필터 체인 기반 인증·인가, JWT 통합 용이 |
+| Spring AI | 1.0.0-M6 | OpenAI ChatClient 추상화, 프롬프트 체이닝 구현 |
+| Google GenAI SDK | 1.2.0 | Gemini 이미지 생성 (Base64 직접 반환) |
 | Gradle | 8.14.3 | Maven 대비 빌드 속도 우수, Groovy DSL |
 | Lombok | - | 보일러플레이트 코드 제거 |
 
@@ -66,7 +68,7 @@
 
 | 환경 | DB | 이유 |
 |------|-----|------|
-| 개발·테스트 | H2 In-Memory | 별도 설치 없이 빠른 개발 가능, @ActiveProfiles("dev") |
+| 개발·테스트 | H2 In-Memory | 별도 설치 없이 빠른 개발 가능, `--spring.profiles.active=dev` |
 | 운영 | MySQL 8.x | ACID 보장, 국내 금융권 표준 RDBMS |
 
 ### 2.3 Frontend
@@ -91,7 +93,7 @@
 |-----|------|
 | Naver Books API | 도서 검색 (제목, 저자, ISBN, 표지 이미지) |
 | OpenAI GPT-4o | 책 분석 (장르·분위기·테마·감정), 한국어 요약 생성, 이미지 프롬프트 생성 |
-| OpenAI DALL-E 3 | 1024x1024 커버 아트 생성 |
+| Google Gemini (`gemini-2.5-flash-image`) | 커버 아트 생성 (Base64 바이너리 직접 반환) |
 
 ---
 
@@ -111,7 +113,7 @@
 │  JwtAuthFilter → SecurityFilterChain → Controller        │
 │                                                          │
 │  ┌──────────────┐  ┌──────────────┐  ┌───────────────┐  │
-│  │ AuthController│  │BookController│  │GlobalException│  │
+│  │AuthController│  │BookController│  │GlobalException│  │
 │  └──────┬───────┘  └──────┬───────┘  │   Handler     │  │
 │         │                 │          └───────────────┘  │
 │  ┌──────▼───────┐  ┌──────▼───────┐                     │
@@ -134,7 +136,7 @@
                    └─────────┘  └──────────┘  └──────────┘│
 ```
 
-### 3.2 디렉토리 구조 (현재 기준)
+### 3.2 디렉토리 구조
 
 ```
 bookcard/
@@ -143,6 +145,7 @@ bookcard/
 │   │   ├── java/com/example/bookcard/
 │   │   │   ├── BookcardApplication.java
 │   │   │   ├── config/
+│   │   │   │   ├── AiConfig.java               # Spring AI ChatClient Bean 등록
 │   │   │   │   ├── AsyncConfig.java            # ExecutorService Bean (SSE용)
 │   │   │   │   ├── CorsConfig.java             # CORS 허용 설정
 │   │   │   │   ├── GlobalExceptionHandler.java # 전역 예외처리 (@RestControllerAdvice)
@@ -165,12 +168,7 @@ bookcard/
 │   │   │   │   ├── GenerationProgress.java     # SSE 이벤트 DTO
 │   │   │   │   ├── NaverBookItem.java
 │   │   │   │   ├── NaverSearchResponse.java
-│   │   │   │   └── openai/
-│   │   │   │       ├── ChatMessage.java
-│   │   │   │       ├── ChatRequest.java
-│   │   │   │       ├── ChatResponse.java
-│   │   │   │       ├── ImageRequest.java
-│   │   │   │       └── ImageResponse.java
+│   │   │   │   └── RecommendationCategory.java
 │   │   │   ├── entity/
 │   │   │   │   ├── Book.java                   # @ManyToOne User creator
 │   │   │   │   └── User.java                   # UserDetails 구현체
@@ -189,10 +187,10 @@ bookcard/
 │       └── java/com/example/bookcard/
 │           ├── BookcardApplicationTests.java   # @ActiveProfiles("dev")
 │           ├── config/
-│           │   └── JwtUtilTest.java            # 6개 테스트
+│           │   └── JwtUtilTest.java            # 5개 테스트
 │           └── service/
 │               ├── AuthServiceTest.java        # 3개 테스트
-│               └── BookServiceTest.java        # 6개 테스트
+│               └── BookServiceTest.java        # 8개 테스트
 ├── frontend/
 │   ├── src/
 │   │   ├── App.jsx                             # 라우터 설정
@@ -218,9 +216,8 @@ bookcard/
 │   ├── package.json
 │   └── vite.config.js
 ├── uploads/
-│   └── images/                                 # DALL-E 생성 이미지 로컬 저장
-├── .claude/
-│   └── settings.local.json                     # Claude Code 권한 설정
+│   └── images/                                 # Gemini 생성 이미지 로컬 저장
+├── load-test.js                                # k6 부하 테스트 스크립트
 ├── CLAUDE.md
 ├── DEVELOPMENT_GUIDE.md
 ├── PROJECT_SPECIFICATION.md
@@ -237,7 +234,7 @@ bookcard/
 | Service | AuthService, BookService, ... | 비즈니스 로직, 트랜잭션 경계 |
 | Repository | BookRepository, UserRepository | JPA 기반 DB 접근 |
 | Entity | Book, User | DB 테이블 매핑, 도메인 로직 |
-| Config | SecurityConfig, GlobalExceptionHandler, ... | 횡단 관심사 |
+| Config | SecurityConfig, AiConfig, GlobalExceptionHandler, ... | 횡단 관심사 |
 
 ---
 
@@ -267,7 +264,7 @@ bookcard/
 │ author         VARCHAR  NOT NULL │
 │ publisher      VARCHAR           │
 │ original_image VARCHAR(1000)     │  ← 네이버 제공 표지 URL
-│ generated_image VARCHAR(1000)    │  ← DALL-E 이미지 로컬 경로
+│ generated_image VARCHAR(1000)    │  ← Gemini 이미지 로컬 경로
 │ description    TEXT              │
 │ like_count     INT  DEFAULT 0    │
 │ created_at     DATETIME          │
@@ -292,8 +289,9 @@ bookcard/
 Book 엔티티 내에 `List<String>`으로 선언하면 JPA가 자동으로 조인 테이블 생성.
 
 **generated_image를 URL이 아닌 로컬 경로로 저장하는 이유**
-DALL-E 3가 반환하는 URL은 1시간 후 만료됨.
-`ImageStorageService`가 생성 즉시 로컬(`uploads/images/`)에 다운로드하여 영속적으로 보관.
+Gemini는 이미지를 Base64 바이너리로 직접 반환한다. 외부 URL이 없으므로
+`ImageStorageService`가 생성 즉시 로컬(`uploads/images/`)에 파일로 저장하고
+`/images/UUID.png` 경로를 DB에 저장한다. 서버 재시작 후에도 이미지가 유지된다.
 
 **user_id FK가 nullable인 이유**
 초기에 비회원 생성을 허용하다가 JWT 인증 추가 이후 creator 필드를 붙였기 때문.
@@ -356,7 +354,6 @@ Client → Authorization: Bearer {token}
 
 **해결**: `PasswordEncoderConfig.java`를 별도 `@Configuration`으로 분리
 ```java
-// PasswordEncoderConfig.java
 @Bean
 public PasswordEncoder passwordEncoder() {
     return new BCryptPasswordEncoder();
@@ -374,23 +371,22 @@ SecurityConfig는 PasswordEncoderConfig의 Bean을 주입받아 사용.
 **Request Body**
 ```json
 {
-  "email": "user@example.com",    // @Email, 필수
-  "password": "password123",      // @Size(min=6), 필수
-  "nickname": "사용자닉네임"       // @Size(min=2, max=20), 필수
+  "email": "user@example.com",
+  "password": "password123",
+  "nickname": "사용자닉네임"
 }
 ```
+**Validation**: email `@Email` 필수, password `@Size(min=6)` 필수, nickname `@Size(min=2, max=20)` 필수
+
 **Response 200**
 ```json
 {
-  "token": "eyJhbGciOiJIUzI1Ni...",
+  "token": "eyJhbGciOiJIUzM4NC...",
   "email": "user@example.com",
   "nickname": "사용자닉네임"
 }
 ```
 **Response 400** — 중복 이메일 또는 유효성 검증 실패
-```json
-{ "message": "이미 사용 중인 이메일입니다" }
-```
 
 #### POST /api/auth/login — 로그인
 **Request Body**
@@ -402,9 +398,6 @@ SecurityConfig는 PasswordEncoderConfig의 Bean을 주입받아 사용.
 ```
 **Response 200** — 회원가입과 동일 구조
 **Response 401** — 이메일/비밀번호 불일치
-```json
-{ "message": "이메일 또는 비밀번호가 올바르지 않습니다" }
-```
 
 ### 6.2 북카드 API
 
@@ -485,13 +478,10 @@ event: progress
 data: {"step":3,...,"message":"예술적인 이미지 컨셉을 구상하고 있습니다..."}
 
 event: progress
-data: {"step":4,...,"message":"DALL-E로 커버 이미지를 생성하고 있습니다..."}
-
-event: progress
-data: {"step":5,...,"message":"이미지를 저장하고 있습니다..."}
+data: {"step":4,...,"message":"Gemini로 커버 이미지를 생성하고 있습니다..."}
 
 event: complete
-data: {"step":5,"status":"completed","message":"완료!","data":{/* Book 객체 */}}
+data: {"step":4,"status":"completed","message":"완료!","data":{/* Book 객체 */}}
 ```
 **타임아웃**: 5분 (300,000ms)
 
@@ -528,46 +518,51 @@ data: {"step":5,"status":"completed","message":"완료!","data":{/* Book 객체 
 입력: { title, author, description }
         │
         ▼
-[Step 1] 책 분석 (GPT-4o)
-  → BookAnalysis { genre, mood, themes[], emotions[], visualStyle, colors[], era, setting }
+[Step 1] 책 분석 (GPT-4o)  — 실측 약 6,400ms
+  → BookAnalysis { genre, mood, themes[], emotions[], visualStyle, colors[], era, setting,
+                   bookCategory, knowledgeLevel, uniqueHighlight }
         │
         ▼
-[Step 2] 한국어 요약 생성 (GPT-4o)
+[Step 2] 한국어 요약 생성 (GPT-4o)  — 실측 약 1,750ms
   입력: 책 정보 + Step1 분석 결과
-  → List<String> summary (5문장, 각 20~40자)
+  → List<String> summary (5문장)
         │
         ▼
-[Step 3] 이미지 프롬프트 생성 (GPT-4o)
+[Step 3] 이미지 프롬프트 생성 (GPT-4o)  — 실측 약 1,680ms
   입력: 책 정보 + Step1 분석 + Step2 요약
-  → String imagePrompt (영어, DALL-E용)
+  → String imagePrompt (영어, Gemini용, 200단어 이하)
         │
         ▼
-[Step 4] 이미지 생성 (DALL-E 3)
+[Step 4] 이미지 생성 (Gemini)  — 실측 약 11,300ms
   입력: Step3 imagePrompt
-  → String imageUrl (1시간 유효)
+  → byte[] imageData (Base64 디코딩된 바이너리)
         │
         ▼
-[Step 5] 이미지 저장
-  → 로컬 downloads 후 영속 경로 반환
+[저장] ImageStorageService
+  → uploads/images/UUID.png 로 저장
+  → /images/UUID.png 경로를 DB에 저장
         │
         ▼
-출력: Book 엔티티 저장 및 반환
+출력: Book 엔티티 저장 및 반환  (전체 소요 약 21초)
 ```
 
-**GPT-4o 호출 설정**
+**GPT-4o 호출 설정** (Spring AI)
 - model: `gpt-4o`
 - maxTokens: 1000
 - temperature: 0.7
-- DALL-E model: `dall-e-3`, size: `1024x1024`, quality: `standard`
+
+**Gemini 호출 설정** (Google GenAI SDK)
+- model: `gemini-2.5-flash-image`
+- 출력: Base64 인라인 데이터 (URL 아님)
 
 ### 7.2 SSE (Server-Sent Events) 실시간 스트리밍
 
-**선택 이유**: 북카드 생성은 30~60초 소요. 단순 로딩보다 단계별 진행 표시로 UX 개선.
+**선택 이유**: 북카드 생성은 약 21초 소요. 단순 로딩보다 단계별 진행 표시로 UX 개선.
 WebSocket이 아닌 SSE를 선택한 이유: 서버→클라이언트 단방향 통신으로 충분하며, SSE는 HTTP 기반이라 방화벽 친화적.
 
 **구현 방식**
 ```java
-// AsyncConfig에서 Bean으로 관리 (컨트롤러 직접 생성 방지)
+// AsyncConfig — Bean으로 관리 (컨트롤러 직접 생성 방지)
 @Bean(destroyMethod = "shutdown")
 public ExecutorService sseExecutorService() {
     return Executors.newCachedThreadPool();
@@ -575,7 +570,11 @@ public ExecutorService sseExecutorService() {
 
 // BookController
 SseEmitter emitter = new SseEmitter(300000L); // 5분 타임아웃
+
+// SecurityContext를 스레드에 전달 (비동기 스레드에서도 인증 유지)
+SecurityContext securityContext = SecurityContextHolder.getContext();
 executor.execute(() -> {
+    SecurityContextHolder.setContext(securityContext);
     Book book = bookService.generateBook(request, (progress) -> {
         emitter.send(SseEmitter.event().name("progress").data(progress));
     });
@@ -583,6 +582,10 @@ executor.execute(() -> {
     emitter.complete();
 });
 ```
+
+**핵심 포인트**: `SecurityContextHolder`는 기본적으로 `ThreadLocal` 기반이라
+비동기 스레드에서 인증 정보가 사라진다.
+`DispatcherType.ASYNC`를 Security 필터에 허용하고 컨텍스트를 명시적으로 전달해야 한다.
 
 ### 7.3 전역 예외 처리
 
@@ -679,13 +682,6 @@ export function AuthProvider({ children }) {
     navigate('/login');
   };
 
-  // 앱 시작 시 토큰으로 상태 복원
-  useEffect(() => {
-    if (authApi.isLoggedIn()) {
-      // /api/auth/me 엔드포인트 구현 후 사용자 정보 복원
-    }
-  }, []);
-
   return (
     <AuthContext.Provider value={{ user, login, logout, isLoggedIn: !!user }}>
       {children}
@@ -712,6 +708,9 @@ NAVER_CLIENT_SECRET=발급받은_시크릿
 # OpenAI
 OPENAI_API_KEY=sk-...
 
+# Google Gemini
+GEMINI_API_KEY=AIza...
+
 # JWT (32자 이상)
 JWT_SECRET=bookcard-secret-key-must-be-at-least-32-characters-long
 ```
@@ -722,6 +721,14 @@ JWT_SECRET=bookcard-secret-key-must-be-at-least-32-characters-long
 spring:
   profiles:
     active: prod    # 기본 prod, 테스트 시 dev
+  ai:
+    openai:
+      api-key: ${OPENAI_API_KEY:}
+      chat:
+        options:
+          model: gpt-4o
+          temperature: 0.7
+          max-tokens: 1000
 
 jwt:
   secret: ${JWT_SECRET}
@@ -731,10 +738,9 @@ naver.client:
   id: ${NAVER_CLIENT_ID}
   secret: ${NAVER_CLIENT_SECRET}
 
-openai:
-  api.key: ${OPENAI_API_KEY}
-  model: gpt-4o
-  image.model: dall-e-3
+gemini:
+  api.key: ${GEMINI_API_KEY}
+  image.model: gemini-2.5-flash-image
 
 ---
 spring.config.activate.on-profile: dev
@@ -753,20 +759,34 @@ spring.config.activate.on-profile: prod
 
 ```gradle
 dependencies {
+    // Spring Boot
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
     implementation 'org.springframework.boot:spring-boot-starter-web'
     implementation 'org.springframework.boot:spring-boot-starter-security'
     implementation 'org.springframework.boot:spring-boot-starter-validation'
-    implementation 'me.paulschwarz:spring-dotenv:4.0.0'
+
+    // AI
+    implementation 'org.springframework.ai:spring-ai-openai-spring-boot-starter:1.0.0-M6'
+    implementation 'com.google.genai:google-genai:1.2.0'
+
+    // JWT
     implementation 'io.jsonwebtoken:jjwt-api:0.12.6'
     runtimeOnly 'io.jsonwebtoken:jjwt-impl:0.12.6'
     runtimeOnly 'io.jsonwebtoken:jjwt-jackson:0.12.6'
+
+    // 기타
+    implementation 'me.paulschwarz:spring-dotenv:4.0.0'
     compileOnly 'org.projectlombok:lombok'
     annotationProcessor 'org.projectlombok:lombok'
+
+    // Database
     runtimeOnly 'com.mysql:mysql-connector-j'
     runtimeOnly 'com.h2database:h2'
+
+    // Test
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
     testImplementation 'org.springframework.security:spring-security-test'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
 ```
 
@@ -784,11 +804,14 @@ cp .env.example .env
 # 2. dev 프로파일로 실행 (H2, MySQL 불필요)
 ./gradlew bootRun --args='--spring.profiles.active=dev'
 
-# 3. prod 프로파일로 실행 (MySQL 필요)
+# 3. prod 프로파일로 실행 (MySQL 필요, 기본값)
 ./gradlew bootRun
 
 # 4. 테스트 실행
 ./gradlew test
+
+# 5. 부하 테스트 (k6 필요)
+k6 run load-test.js
 ```
 
 ### 10.2 Frontend 실행
@@ -833,8 +856,8 @@ npm run dev    # http://localhost:5173
 
 | # | 이슈 | 개선 방향 |
 |---|------|----------|
-| 9 | `RestTemplate` 사용 (deprecated) | `WebClient` 전환, 비동기 처리 가능 |
-| 10 | 네이버 검색 결과 캐싱 없음 | `@Cacheable` + Caffeine 또는 Redis |
+| 9 | 네이버 검색 결과 캐싱 없음 | `@Cacheable` + Caffeine 또는 Redis |
+| 10 | 동시 생성 요청 시 같은 ISBN 중복 생성 가능 | DB unique 제약 + 낙관적 락 |
 
 ---
 
@@ -871,7 +894,15 @@ npm run dev    # http://localhost:5173
 > 이런 종속적 값 타입 컬렉션에 @ElementCollection이 적합합니다.
 > 요약 문장 자체에 비즈니스 로직이 생기거나 독립 조회가 필요하다면 엔티티로 승격할 것입니다.
 
-### Q. DALL-E 이미지를 왜 로컬에 저장하나요?
-> DALL-E 3가 반환하는 이미지 URL은 약 1시간 후 만료됩니다.
-> URL을 그대로 DB에 저장하면 시간이 지난 후 이미지가 깨집니다.
-> ImageStorageService가 생성 직후 서버에 다운로드하여 영속적으로 보관합니다.
+### Q. Gemini 이미지를 왜 로컬에 저장하나요?
+> Gemini는 이미지를 URL이 아닌 Base64 바이너리로 직접 반환합니다.
+> 외부에서 접근 가능한 URL 자체가 없으므로 서버에 파일로 저장하는 것이 유일한 선택입니다.
+> ImageStorageService가 Base64 데이터를 디코딩해 uploads/images/에 저장하고,
+> 정적 리소스 핸들러(WebConfig)를 통해 /images/** 경로로 서빙합니다.
+
+### Q. SSE 비동기 처리에서 SecurityContext는 어떻게 유지했나요?
+> SecurityContextHolder는 기본적으로 ThreadLocal 기반이라
+> executor 스레드에서는 인증 정보가 사라집니다.
+> 컨트롤러에서 현재 SecurityContext를 캡처한 뒤,
+> executor.execute() 내부에서 SecurityContextHolder.setContext()로 명시적으로 설정했습니다.
+> 처리 완료 후에는 clearContext()로 스레드 오염을 방지합니다.
