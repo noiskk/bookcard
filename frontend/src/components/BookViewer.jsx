@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { X, ChevronLeft, ChevronRight, BookOpen, Quote, Heart, Share2, Check } from 'lucide-react'
 import bookApi from '../api/bookApi'
 
@@ -6,8 +6,20 @@ function BookViewer({ book, onClose, onBookUpdate }) {
   const [currentPage, setCurrentPage] = useState(0)
   const [isTransitioning, setIsTransitioning] = useState(false)
   const [likeCount, setLikeCount] = useState(book?.likeCount || 0)
+  const [liked, setLiked] = useState(false)
   const [isLiking, setIsLiking] = useState(false)
   const [copied, setCopied] = useState(false)
+
+  // 좋아요 상태 조회
+  useEffect(() => {
+    if (!book?.id) return
+    bookApi.getLikeStatus(book.id)
+      .then((res) => {
+        setLiked(res.liked)
+        setLikeCount(res.likeCount)
+      })
+      .catch(() => {})
+  }, [book?.id])
 
   if (!book) return null
 
@@ -15,9 +27,11 @@ function BookViewer({ book, onClose, onBookUpdate }) {
     if (!book.id || isLiking) return
     setIsLiking(true)
     try {
-      const updatedBook = await bookApi.likeBook(book.id)
-      setLikeCount(updatedBook.likeCount)
-      onBookUpdate?.(updatedBook)
+      const res = await bookApi.likeBook(book.id)
+      setLikeCount(res.likeCount)
+      setLiked(res.liked)
+      // onBookUpdate에 likeCount 반영
+      onBookUpdate?.({ ...book, likeCount: res.likeCount })
     } catch (err) {
       console.error('Failed to like:', err)
     } finally {
@@ -311,9 +325,13 @@ function BookViewer({ book, onClose, onBookUpdate }) {
               <button
                 onClick={handleLike}
                 disabled={isLiking}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-white/10 backdrop-blur-md rounded-full text-white/80 hover:text-white hover:bg-white/20 transition-all duration-300"
+                className={`flex items-center gap-1.5 px-3 py-1.5 backdrop-blur-md rounded-full transition-all duration-300 ${
+                  liked
+                    ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30'
+                    : 'bg-white/10 text-white/80 hover:text-white hover:bg-white/20'
+                }`}
               >
-                <Heart className={`w-4 h-4 ${isLiking ? 'animate-pulse' : ''}`} />
+                <Heart className={`w-4 h-4 ${isLiking ? 'animate-pulse' : ''} ${liked ? 'fill-current' : ''}`} />
                 <span className="text-sm">{likeCount}</span>
               </button>
               <button

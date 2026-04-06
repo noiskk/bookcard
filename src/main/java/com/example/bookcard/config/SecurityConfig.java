@@ -39,6 +39,8 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                         // 인증 없이 허용
                         .requestMatchers("/api/auth/**").permitAll()
+                        // 내 북카드 조회는 인증 필요 (GET /api/books/** permitAll보다 먼저 매칭)
+                        .requestMatchers(HttpMethod.GET, "/api/books/my").authenticated()
                         .requestMatchers(HttpMethod.GET, "/api/books", "/api/books/**").permitAll()
                         .requestMatchers("/images/**").permitAll()
                         .requestMatchers("/h2-console/**").permitAll()

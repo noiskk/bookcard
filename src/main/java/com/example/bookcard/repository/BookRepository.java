@@ -1,6 +1,7 @@
 package com.example.bookcard.repository;
 
 import com.example.bookcard.entity.Book;
+import com.example.bookcard.entity.User;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -28,6 +29,8 @@ public interface BookRepository extends JpaRepository<Book, Long> {
     List<Book> findAllByOrderByCreatedAtDesc();
 
     Page<Book> findAllByOrderByCreatedAtDesc(Pageable pageable);
+
+    Page<Book> findByCreatorOrderByCreatedAtDesc(User creator, Pageable pageable);
 
     // 동시 요청 안전한 좋아요 증가 (DB에서 원자적 처리)
     @Modifying

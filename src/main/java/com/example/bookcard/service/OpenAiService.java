@@ -102,9 +102,17 @@ public class OpenAiService {
     // ========================================
 
     public List<String> generateSummary(String title, String author, String description, BookAnalysis analysis) {
+        return generateSummary(title, author, description, analysis, UserSettings.empty());
+    }
+
+    public List<String> generateSummary(String title, String author, String description, BookAnalysis analysis,
+                                         UserSettings userSettings) {
         try {
             String categoryStrategy = buildCategoryStrategy(analysis);
             String knowledgeInstruction = buildKnowledgeInstruction(analysis);
+            String styleInstruction = buildStyleInstruction(userSettings);
+            String lengthInstruction = buildLengthInstruction(userSettings);
+            String customPromptInstruction = buildCustomPromptInstruction(userSettings);
 
             String systemPrompt = String.format("""
                 당신은 서점 POP, 독립서점 추천 카드, 출판사 띠지 문구를 쓰는 카피라이터입니다.
@@ -112,8 +120,10 @@ public class OpenAiService {
 
                 반드시 지켜야 할 규칙:
                 1. 순수 JSON 배열만 출력하세요. 다른 텍스트 없이.
-                2. 5개의 문장. 전체 흐름이 하나의 짧은 글처럼 읽혀야 합니다.
+                2. %s
                 3. 한글로 작성.
+
+                %s
 
                 ★ 문장 스타일 규칙 (가장 중요):
                 - 문장 길이를 섞으세요. 짧은 문장(10~20자)과 긴 문장(30~60자)을 교차.
@@ -130,13 +140,15 @@ public class OpenAiService {
 
                 %s
 
+                %s
+
                 절대 하지 말 것:
                 - "A는 B다. C는 D다." 같은 격언/명언 나열체
                 - "~임을 알게 된다", "~을 겪는다" 같은 줄거리 요약 문체
                 - "매력적이다", "흥미롭다", "감동적이다" 같은 평가 형용사
                 - 어느 책에나 붙일 수 있는 뻔한 문장
                 - 모든 문장이 비슷한 길이와 구조로 반복되는 것
-                """, categoryStrategy, knowledgeInstruction);
+                """, lengthInstruction, styleInstruction, categoryStrategy, knowledgeInstruction, customPromptInstruction);
 
             String userPrompt = String.format("""
                 이 책을 읽고 싶게 만드는 5개의 문장을 JSON 배열로 작성하세요.
@@ -276,14 +288,27 @@ public class OpenAiService {
     // 전체 체이닝 실행 (Full Chain)
     // ========================================
 
+    // 사용자 설정값을 전달하기 위한 레코드
+    public record UserSettings(String summaryStyle, String summaryLength, String defaultPrompt) {
+        public static UserSettings empty() {
+            return new UserSettings(null, null, null);
+        }
+    }
+
     public record GenerationResult(BookAnalysis analysis, List<String> summary, ImageResult imageResult) {}
 
     public GenerationResult generateWithChaining(String title, String author, String description) {
-        return generateWithChaining(title, author, description, null);
+        return generateWithChaining(title, author, description, null, null);
     }
 
     public GenerationResult generateWithChaining(String title, String author, String description,
                                                   Consumer<String> progressCallback) {
+        return generateWithChaining(title, author, description, progressCallback, null);
+    }
+
+    public GenerationResult generateWithChaining(String title, String author, String description,
+                                                  Consumer<String> progressCallback,
+                                                  UserSettings userSettings) {
         log.info("Starting prompt chaining for: {} by {}", title, author);
         long total = System.currentTimeMillis();
 
@@ -294,7 +319,8 @@ public class OpenAiService {
 
         if (progressCallback != null) progressCallback.accept("2:감성적인 한글 요약을 작성하고 있습니다...");
         long t2 = System.currentTimeMillis();
-        List<String> summary = generateSummary(title, author, description, analysis);
+        UserSettings settings = userSettings != null ? userSettings : UserSettings.empty();
+        List<String> summary = generateSummary(title, author, description, analysis, settings);
         log.info("[Chain 2/4] 한글 요약 완료: {}ms", System.currentTimeMillis() - t2);
 
         if (progressCallback != null) progressCallback.accept("3:예술적인 이미지 컨셉을 구상하고 있습니다...");
@@ -390,6 +416,31 @@ public class OpenAiService {
             case "medium" -> "★ 당신은 이 책을 어느 정도 알고 있습니다. 제공된 소개와 당신의 지식을 함께 활용하세요.";
             default -> "★ 제공된 책 소개를 최대한 활용하되, 추상적인 표현은 피하고 소개에서 구체적인 소재를 뽑아내세요.";
         };
+    }
+
+    private String buildStyleInstruction(UserSettings settings) {
+        if (settings == null || settings.summaryStyle() == null) return "";
+        return switch (settings.summaryStyle()) {
+            case "literary" -> "★ 스타일: 문학적 분석 톤으로 작성하세요. 깊이 있는 통찰과 문학적 표현을 사용하세요.";
+            case "poetic" -> "★ 스타일: 시적이고 예술적인 톤으로 작성하세요. 은유와 감각적 이미지를 적극 활용하세요.";
+            case "concise" -> "★ 스타일: 간결하고 직접적인 톤으로 작성하세요. 군더더기 없이 핵심만 전달하세요.";
+            case "storytelling" -> "★ 스타일: 스토리텔링 톤으로 작성하세요. 마치 이야기를 들려주듯 자연스럽게 풀어가세요.";
+            default -> "";
+        };
+    }
+
+    private String buildLengthInstruction(UserSettings settings) {
+        if (settings == null || settings.summaryLength() == null) return "5개의 문장. 전체 흐름이 하나의 짧은 글처럼 읽혀야 합니다.";
+        return switch (settings.summaryLength()) {
+            case "short" -> "3개의 문장. 짧고 강렬하게, 핵심만 담아 작성하세요.";
+            case "long" -> "7개의 문장. 여유 있게 풀어가되, 글의 밀도를 유지하세요.";
+            default -> "5개의 문장. 전체 흐름이 하나의 짧은 글처럼 읽혀야 합니다."; // medium
+        };
+    }
+
+    private String buildCustomPromptInstruction(UserSettings settings) {
+        if (settings == null || settings.defaultPrompt() == null || settings.defaultPrompt().isBlank()) return "";
+        return "★ 사용자 추가 지시: " + settings.defaultPrompt();
     }
 
     private BookAnalysis createDefaultAnalysis(String title) {

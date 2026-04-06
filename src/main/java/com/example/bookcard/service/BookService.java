@@ -2,9 +2,12 @@ package com.example.bookcard.service;
 
 import com.example.bookcard.dto.BookGenerateRequest;
 import com.example.bookcard.dto.BookSearchResult;
+import com.example.bookcard.dto.LikeResponse;
 import com.example.bookcard.dto.RecommendationCategory;
 import com.example.bookcard.entity.Book;
+import com.example.bookcard.entity.BookLike;
 import com.example.bookcard.entity.User;
+import com.example.bookcard.repository.BookLikeRepository;
 import com.example.bookcard.repository.BookRepository;
 import com.example.bookcard.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
@@ -48,6 +51,7 @@ public class BookService {
     private static final String CACHE_KEY = "recommendations";
 
     private final BookRepository bookRepository;
+    private final BookLikeRepository bookLikeRepository;
     private final UserRepository userRepository;
     private final NaverSearchService naverSearchService;
     private final OpenAiService openAiService;
@@ -72,6 +76,12 @@ public class BookService {
     @Transactional(readOnly = true)
     public Page<Book> getPagedBooks(Pageable pageable) {
         return bookRepository.findAllByOrderByCreatedAtDesc(pageable);
+    }
+
+    @Transactional(readOnly = true)
+    public Page<Book> getMyBooks(Pageable pageable) {
+        User user = getCurrentUser();
+        return bookRepository.findByCreatorOrderByCreatedAtDesc(user, pageable);
     }
 
     @Transactional(readOnly = true)
@@ -148,9 +158,16 @@ public class BookService {
         String author = request.getAuthor();
         String description = request.getDescription();
 
+        // 사용자 설정값 추출
+        OpenAiService.UserSettings userSettings = new OpenAiService.UserSettings(
+                request.getSummaryStyle(),
+                request.getSummaryLength(),
+                request.getDefaultPrompt()
+        );
+
         // 프롬프트 체이닝 실행 (1단계 → 2단계 → 3단계 → 4단계)
         OpenAiService.GenerationResult result = openAiService.generateWithChaining(
-                title, author, description, progressCallback);
+                title, author, description, progressCallback, userSettings);
 
         // 이미지를 로컬에 저장
         if (progressCallback != null) {
@@ -204,9 +221,49 @@ public class BookService {
     }
 
     @Transactional
-    public Book likeBook(Long id) {
-        bookRepository.incrementLikeCount(id); // DB에서 원자적으로 +1
-        return bookRepository.findById(id)
+    public LikeResponse toggleLike(Long id) {
+        Book book = bookRepository.findById(id)
                 .orElseThrow(() -> new RuntimeException("Book not found: " + id));
+        User currentUser = getCurrentUser();
+
+        Optional<BookLike> existingLike = bookLikeRepository.findByBookAndUser(book, currentUser);
+        boolean liked;
+
+        if (existingLike.isPresent()) {
+            // 이미 좋아요 → 취소
+            bookLikeRepository.delete(existingLike.get());
+            liked = false;
+        } else {
+            // 좋아요 추가
+            BookLike bookLike = BookLike.builder()
+                    .book(book)
+                    .user(currentUser)
+                    .build();
+            bookLikeRepository.save(bookLike);
+            liked = true;
+        }
+
+        // likeCount를 실제 카운트로 동기화
+        long count = bookLikeRepository.countByBook(book);
+        book.setLikeCount((int) count);
+        bookRepository.save(book);
+
+        return LikeResponse.builder()
+                .bookId(book.getId())
+                .likeCount(book.getLikeCount())
+                .liked(liked)
+                .build();
+    }
+
+    @Transactional(readOnly = true)
+    public boolean isLikedByCurrentUser(Long bookId) {
+        try {
+            User currentUser = getCurrentUser();
+            Book book = bookRepository.findById(bookId).orElse(null);
+            if (book == null) return false;
+            return bookLikeRepository.existsByBookAndUser(book, currentUser);
+        } catch (Exception e) {
+            return false;
+        }
     }
 }

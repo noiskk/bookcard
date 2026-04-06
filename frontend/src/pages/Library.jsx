@@ -1,19 +1,23 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { Library as LibraryIcon, Loader2, BookOpen, Trash2, Search, X, Heart, Globe, User } from 'lucide-react'
 import BookViewer from '../components/BookViewer'
 import bookApi from '../api/bookApi'
 import authApi from '../api/authApi'
-import myBooks from '../utils/myBooks'
 
 function Library() {
   const [books, setBooks] = useState([])
+  const [myBooks, setMyBooks] = useState([])
   const [searchQuery, setSearchQuery] = useState('')
   const [isLoading, setIsLoading] = useState(true)
   const [selectedBook, setSelectedBook] = useState(null)
   const [error, setError] = useState(null)
   const [viewMode, setViewMode] = useState('all') // 'all' | 'mine'
 
-  const fetchBooks = async () => {
+  // 현재 로그인한 사용자 이메일 (JWT 디코딩)
+  const currentUserEmail = authApi.getCurrentUserEmail()
+  const isLoggedIn = authApi.isLoggedIn()
+
+  const fetchAllBooks = useCallback(async () => {
     try {
       setIsLoading(true)
       setError(null)
@@ -25,24 +29,39 @@ function Library() {
     } finally {
       setIsLoading(false)
     }
-  }
-
-  useEffect(() => {
-    fetchBooks()
   }, [])
 
-  // Get my book IDs from localStorage (fallback)
-  const myBookIds = myBooks.getAll()
-  // 현재 로그인한 사용자 이메일 (JWT 디코딩)
-  const currentUserEmail = authApi.getCurrentUserEmail()
-
-  // Filter books based on view mode and search
-  const filteredBooks = books.filter((book) => {
-    // Filter by view mode
-    if (viewMode === 'mine' && !myBookIds.includes(book.id)) {
-      return false
+  const fetchMyBooks = useCallback(async () => {
+    if (!isLoggedIn) {
+      setMyBooks([])
+      return
     }
-    // Filter by search query
+    try {
+      setIsLoading(true)
+      setError(null)
+      const data = await bookApi.getMyBooks(0, 100)
+      setMyBooks(data.content)
+    } catch (err) {
+      setError('내 북카드를 불러오는데 실패했습니다.')
+      console.error(err)
+    } finally {
+      setIsLoading(false)
+    }
+  }, [isLoggedIn])
+
+  useEffect(() => {
+    if (viewMode === 'all') {
+      fetchAllBooks()
+    } else {
+      fetchMyBooks()
+    }
+  }, [viewMode, fetchAllBooks, fetchMyBooks])
+
+  // 현재 뷰모드에 따라 표시할 책 목록
+  const currentBooks = viewMode === 'mine' ? myBooks : books
+
+  // Filter books based on search
+  const filteredBooks = currentBooks.filter((book) => {
     if (!searchQuery.trim()) return true
     const query = searchQuery.toLowerCase()
     return (
@@ -52,9 +71,7 @@ function Library() {
   })
 
   // Stats for current view
-  const displayBooks = viewMode === 'mine'
-    ? books.filter(b => myBookIds.includes(b.id))
-    : books
+  const displayBooks = currentBooks
 
   const handleDelete = async (id, e) => {
     e.stopPropagation()
@@ -62,7 +79,7 @@ function Library() {
     try {
       await bookApi.deleteBook(id)
       setBooks((prev) => prev.filter((b) => b.id !== id))
-      myBooks.remove(id) // 로컬스토리지에서도 제거
+      setMyBooks((prev) => prev.filter((b) => b.id !== id))
     } catch (err) {
       setError('북카드 삭제에 실패했습니다.')
       console.error(err)
@@ -107,7 +124,13 @@ function Library() {
             전체
           </button>
           <button
-            onClick={() => setViewMode('mine')}
+            onClick={() => {
+              if (!isLoggedIn) {
+                setError('내 북카드를 보려면 로그인이 필요합니다.')
+                return
+              }
+              setViewMode('mine')
+            }}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
               viewMode === 'mine'
                 ? 'bg-white text-stone-800 shadow-sm'
@@ -206,7 +229,7 @@ function Library() {
                 )}
 
                 {/* Overlay with delete button - 본인이 만든 북카드만 표시 */}
-                {(book.createdBy === currentUserEmail || myBookIds.includes(book.id)) && currentUserEmail && (
+                {book.createdBy === currentUserEmail && currentUserEmail && (
                   <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-colors duration-300">
                     <button
                       onClick={(e) => handleDelete(book.id, e)}

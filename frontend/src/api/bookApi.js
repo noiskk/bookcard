@@ -1,6 +1,25 @@
 const API_BASE_URL = 'http://localhost:8080/api';
 const BACKEND_URL = 'http://localhost:8080';
 const TOKEN_KEY = 'bookcard_token';
+const SETTINGS_KEY = 'bookcard-settings';
+
+// localStorage에서 사용자 설정값 읽기
+const getUserSettings = () => {
+  try {
+    const stored = localStorage.getItem(SETTINGS_KEY);
+    if (stored) {
+      const settings = JSON.parse(stored);
+      return {
+        summaryStyle: settings.summaryStyle || null,
+        summaryLength: settings.summaryLength || null,
+        defaultPrompt: settings.defaultPrompt || null,
+      };
+    }
+  } catch (e) {
+    // 파싱 실패 시 무시
+  }
+  return {};
+};
 
 // 인증 헤더 반환
 const getAuthHeader = () => {
@@ -61,6 +80,7 @@ export const bookApi = {
 
   // Generate a new book card using AI
   async generateBook(bookData) {
+    const settings = getUserSettings();
     const response = await fetch(`${API_BASE_URL}/books/generate`, {
       method: 'POST',
       headers: {
@@ -74,6 +94,7 @@ export const bookApi = {
         publisher: bookData.publisher,
         originalImage: bookData.image,
         description: bookData.description,
+        ...settings,
       }),
     });
     if (!response.ok) throw new Error('Failed to generate book card');
@@ -83,6 +104,7 @@ export const bookApi = {
 
   // Generate a new book card with SSE progress updates
   generateBookWithProgress(bookData, onProgress, onComplete, onError) {
+    const settings = getUserSettings();
     const body = JSON.stringify({
       isbn: bookData.isbn,
       title: bookData.title,
@@ -90,6 +112,7 @@ export const bookApi = {
       publisher: bookData.publisher,
       originalImage: bookData.image,
       description: bookData.description,
+      ...settings,
     });
 
     // SSE는 GET만 지원하므로 fetch로 POST SSE 구현
@@ -149,6 +172,21 @@ export const bookApi = {
     }).catch(onError);
   },
 
+  // Get current user's book cards (authentication required)
+  async getMyBooks(page = 0, size = 12) {
+    const response = await fetch(`${API_BASE_URL}/books/my?page=${page}&size=${size}`, {
+      headers: {
+        ...getAuthHeader(),
+      },
+    });
+    if (!response.ok) throw new Error('Failed to fetch my books');
+    const data = await response.json();
+    return {
+      ...data,
+      content: data.content.map(resolveBookImages),
+    };
+  },
+
   // Get book recommendations by category
   async getRecommendations() {
     const response = await fetch(`${API_BASE_URL}/books/recommendations`);
@@ -167,7 +205,7 @@ export const bookApi = {
     if (!response.ok) throw new Error('Failed to delete book');
   },
 
-  // Like a book card (increment like count)
+  // Toggle like on a book card (like/unlike)
   async likeBook(id) {
     const response = await fetch(`${API_BASE_URL}/books/${id}/like`, {
       method: 'POST',
@@ -176,8 +214,18 @@ export const bookApi = {
       },
     });
     if (!response.ok) throw new Error('Failed to like book');
-    const book = await response.json();
-    return resolveBookImages(book);
+    return await response.json();
+  },
+
+  // Check if current user has liked a book
+  async getLikeStatus(id) {
+    const response = await fetch(`${API_BASE_URL}/books/${id}/like`, {
+      headers: {
+        ...getAuthHeader(),
+      },
+    });
+    if (!response.ok) throw new Error('Failed to get like status');
+    return await response.json();
   },
 };
 

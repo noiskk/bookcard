@@ -3,6 +3,7 @@ package com.example.bookcard.controller;
 import com.example.bookcard.dto.BookGenerateRequest;
 import com.example.bookcard.dto.BookSearchResult;
 import com.example.bookcard.dto.GenerationProgress;
+import com.example.bookcard.dto.LikeResponse;
 import com.example.bookcard.dto.RecommendationCategory;
 import com.example.bookcard.entity.Book;
 import com.example.bookcard.service.BookService;
@@ -49,6 +50,16 @@ public class BookController {
             @RequestParam(name = "page", defaultValue = "0") int page,
             @RequestParam(name = "size", defaultValue = "12") int size) {
         return ResponseEntity.ok(bookService.getPagedBooks(PageRequest.of(page, size)));
+    }
+
+    /**
+     * Get current user's book cards (authentication required)
+     */
+    @GetMapping("/my")
+    public ResponseEntity<Page<Book>> getMyBooks(
+            @RequestParam(name = "page", defaultValue = "0") int page,
+            @RequestParam(name = "size", defaultValue = "12") int size) {
+        return ResponseEntity.ok(bookService.getMyBooks(PageRequest.of(page, size)));
     }
 
     /**
@@ -176,11 +187,27 @@ public class BookController {
     }
 
     /**
-     * Like a book card (increment like count)
+     * Toggle like on a book card (like/unlike)
      */
     @PostMapping("/{id}/like")
-    public ResponseEntity<Book> likeBook(@PathVariable("id") Long id) {
-        Book book = bookService.likeBook(id);
-        return ResponseEntity.ok(book);
+    public ResponseEntity<LikeResponse> likeBook(@PathVariable("id") Long id) {
+        LikeResponse response = bookService.toggleLike(id);
+        return ResponseEntity.ok(response);
+    }
+
+    /**
+     * Check if current user has liked a book
+     */
+    @GetMapping("/{id}/like")
+    public ResponseEntity<LikeResponse> getLikeStatus(@PathVariable("id") Long id) {
+        boolean liked = bookService.isLikedByCurrentUser(id);
+        Book book = bookService.getBookById(id)
+                .orElseThrow(() -> new RuntimeException("Book not found: " + id));
+        LikeResponse response = LikeResponse.builder()
+                .bookId(id)
+                .likeCount(book.getLikeCount())
+                .liked(liked)
+                .build();
+        return ResponseEntity.ok(response);
     }
 }
