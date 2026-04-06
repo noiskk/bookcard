@@ -2,7 +2,7 @@
 
 > AI가 책을 읽고, 북카드를 만들어줍니다.
 
-책 제목을 검색하면 GPT-4o가 분위기를 분석하고 감성적인 5줄 요약을 작성합니다.
+책 제목을 검색하면 GPT가 분위기를 분석하고 감성적인 5줄 요약을 작성합니다.<br>
 Gemini가 그 분위기에 맞는 커버 이미지를 생성하고, 하나의 북카드로 저장됩니다.
 
 ---
@@ -17,6 +17,8 @@ Gemini가 그 분위기에 맞는 커버 이미지를 생성하고, 하나의 �
 - [API 명세](#-api-명세)
 - [성능](#-성능)
 - [프로젝트 문서](#-프로젝트-문서)
+
+<br>
 
 ---
 
@@ -54,7 +56,6 @@ Gemini가 그 분위기에 맞는 커버 이미지를 생성하고, 하나의 �
         비극적인 역사의 잔해 속,<br/>
         우리는 무엇을 기억해야 할까?<br/>
         그녀는 선택했다, 사라진 이들을 떠나보내지 않기로.<br/>
-        그리고 다시, 처음처럼.
       </i>
     </td>
     <td align="center" valign="top">
@@ -72,6 +73,8 @@ Gemini가 그 분위기에 맞는 커버 이미지를 생성하고, 하나의 �
 </table>
 
 > GPT-4o가 책의 장르·분위기·테마를 분석하고, Gemini가 그에 맞는 커버 이미지를 생성합니다.
+
+<br>
 
 ---
 
@@ -93,6 +96,8 @@ Gemini가 그 분위기에 맞는 커버 이미지를 생성하고, 하나의 �
 
 각 단계의 출력이 다음 단계의 입력이 되어 풍부한 컨텍스트를 유지합니다.
 
+<br>
+
 ### SSE 실시간 진행률
 
 생성 중 단계별 메시지를 Server-Sent Events로 실시간 전송합니다.
@@ -100,6 +105,8 @@ Gemini가 그 분위기에 맞는 커버 이미지를 생성하고, 하나의 �
 
 WebSocket 대신 SSE를 선택한 이유: 서버→클라이언트 **단방향** 통신으로 충분하며,
 HTTP 기반이라 방화벽에 친화적입니다.
+
+<br>
 
 ### JWT 인증 + UX 보호
 
@@ -110,15 +117,21 @@ HTTP 기반이라 방화벽에 친화적입니다.
 - **토큰 만료 시** → 401 인터셉터가 자동 로그아웃 후 로그인 페이지 이동
 - **헤더 닉네임 표시** → 로그인 상태를 헤더에서 즉시 확인 가능
 
+<br>
+
 ### 좋아요 — 중복 방지 토글
 
 - `book_likes` 테이블에 `(book_id, user_id)` 복합 유니크 제약으로 중복 방지
 - 동일 사용자가 다시 누르면 취소 (토글), `likeCount`는 실제 레코드 수로 동기화
 
+<br>
+
 ### 동시성 처리
 
 - **ISBN 중복 생성**: DB UNIQUE 제약 + 애플리케이션 레벨 중복 체크
 - **SSE 스레드풀**: `CachedThreadPool` + 비동기 스레드에 SecurityContext 전파
+
+<br>
 
 ---
 
@@ -156,6 +169,8 @@ HTTP 기반이라 방화벽에 친화적입니다.
 | [OpenAI GPT-4o](https://platform.openai.com/docs/models/gpt-4o) | 책 분석 · 요약 · 이미지 프롬프트 |
 | [Google Gemini](https://ai.google.dev/gemini-api/docs/image-generation) | 커버 이미지 생성 |
 
+<br>
+
 ---
 
 ## 🏗 아키텍처
@@ -190,6 +205,8 @@ com.example.bookcard/
 ├── entity/       # Book · User · BookLike
 └── dto/          # 요청/응답 DTO
 ```
+
+<br>
 
 ---
 
@@ -250,6 +267,8 @@ npm run dev   # http://localhost:5173
 open build/reports/jacoco/test/html/index.html
 ```
 
+<br>
+
 ---
 
 ## 📡 API 명세
@@ -269,6 +288,8 @@ open build/reports/jacoco/test/html/index.html
 | `DELETE` | `/api/books/{id}` | ✅ | 북카드 삭제 (본인만) |
 | `POST` | `/api/books/{id}/like` | ✅ | 좋아요 토글 |
 | `GET` | `/api/books/{id}/like` | ✅ | 좋아요 상태 조회 |
+
+<br>
 
 ---
 
@@ -299,6 +320,8 @@ open build/reports/jacoco/test/html/index.html
 
 Gemini 이미지 생성이 전체의 53%를 차지하는 명확한 병목입니다.
 SSE로 단계별 진행 상황을 실시간 전달해 대기 경험을 개선했습니다.
+
+<br>
 
 ---
 
