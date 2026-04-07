@@ -222,7 +222,6 @@ bookcard/
 │   └── vite.config.js
 ├── uploads/
 │   └── images/                                 # Gemini 생성 이미지 로컬 저장
-├── load-test.js                                # k6 부하 테스트 스크립트
 ├── CLAUDE.md
 ├── DEVELOPMENT_GUIDE.md
 ├── PROJECT_SPECIFICATION.md
@@ -791,9 +790,6 @@ cp .env.example .env
 
 # 4. 테스트 실행
 ./gradlew test
-
-# 5. 부하 테스트 (k6 필요)
-k6 run load-test.js
 ```
 
 ### 10.2 Frontend 실행
