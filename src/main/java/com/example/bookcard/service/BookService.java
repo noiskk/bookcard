@@ -15,6 +15,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -76,6 +77,7 @@ public class BookService {
     private final NaverSearchService naverSearchService;
     private final OpenAiService openAiService;
     private final ImageStorageService imageStorageService;
+    private final TransactionTemplate transactionTemplate;
 
     /**
      * Spring Security 컨텍스트에서 현재 인증된 사용자 엔티티를 조회한다.
@@ -182,7 +184,6 @@ public class BookService {
     }
 
     /** 진행 콜백 없이 북카드를 생성한다 (동기 방식). */
-    @Transactional
     public Book generateBook(BookGenerateRequest request) {
         return generateBook(request, null);
     }
@@ -190,25 +191,29 @@ public class BookService {
     /**
      * AI 프롬프트 체이닝으로 북카드를 생성하고 DB에 저장한다.
      *
+     * 트랜잭션 전략:
+     * - AI 작업(~21초)은 트랜잭션 없이 실행하여 DB 커넥션을 점유하지 않는다.
+     * - DB 저장만 TransactionTemplate으로 짧은 트랜잭션을 사용한다.
+     * - 이렇게 하면 AI 작업 중에도 커넥션 풀에 영향을 주지 않는다.
+     *
      * 처리 순서:
-     * 1. ISBN 중복 체크 (DB)
+     * 1. ISBN 중복 체크 (DB, Spring Data JPA 자체 트랜잭션)
      * 2. 동시 생성 방지 락 획득 (ConcurrentHashMap)
-     * 3. OpenAI 4단계 체이닝 실행 (책 분석 → 요약 → 이미지 프롬프트 → 이미지 생성)
-     * 4. Gemini 생성 이미지를 로컬 파일로 저장
-     * 5. Book 엔티티 빌드 후 DB 저장
+     * 3. OpenAI 4단계 체이닝 실행 (트랜잭션 없이)
+     * 4. Gemini 생성 이미지를 로컬 파일로 저장 (트랜잭션 없이)
+     * 5. Book 엔티티 빌드 후 DB 저장 (TransactionTemplate으로 짧은 트랜잭션)
      * 6. finally 블록에서 ISBN 락 해제
      *
      * @param request          북카드 생성에 필요한 책 정보 + 사용자 설정
      * @param progressCallback SSE 진행 상황 콜백 (null이면 무시)
      */
-    @Transactional
     public Book generateBook(BookGenerateRequest request, Consumer<String> progressCallback) {
         log.info("Generating book card for: {} by {}", request.getTitle(), request.getAuthor());
 
         final String isbnKey = (request.getIsbn() != null && !request.getIsbn().isBlank())
                 ? request.getIsbn() : null;
 
-        // ISBN 중복 체크 (DB): 이미 생성된 북카드가 있으면 바로 거부
+        // ISBN 중복 체크 (Spring Data JPA가 자체 짧은 트랜잭션으로 처리)
         if (isbnKey != null) {
             bookRepository.findByIsbn(isbnKey).ifPresent(existing -> {
                 throw new IllegalArgumentException("이미 생성된 북카드가 있습니다 (ID: " + existing.getId() + ")");
@@ -233,11 +238,11 @@ public class BookService {
                     request.getDefaultPrompt()
             );
 
-            // 4단계 프롬프트 체이닝 실행
+            // 4단계 프롬프트 체이닝 실행 (트랜잭션 없이, DB 커넥션 점유하지 않음)
             OpenAiService.GenerationResult result = openAiService.generateWithChaining(
                     title, author, description, progressCallback, userSettings);
 
-            // Gemini 생성 이미지를 서버 로컬에 저장하고 경로 반환
+            // Gemini 생성 이미지를 서버 로컬에 저장 (트랜잭션 없이)
             if (progressCallback != null) {
                 progressCallback.accept("5:이미지를 저장하고 있습니다...");
             }
@@ -248,21 +253,24 @@ public class BookService {
                         result.imageResult().mimeType());
             }
 
-            Book book = Book.builder()
-                    .isbn(request.getIsbn())
-                    .title(title)
-                    .author(author)
-                    .publisher(request.getPublisher())
-                    .originalImage(request.getOriginalImage())
-                    .generatedImage(generatedImage)
-                    .description(description)
-                    .summary(result.summary())
-                    .creator(getCurrentUser())
-                    .build();
+            // DB 저장만 짧은 트랜잭션으로 실행 (커넥션 점유 ~수십ms)
+            final String finalGeneratedImage = generatedImage;
+            Book savedBook = transactionTemplate.execute(status -> {
+                Book book = Book.builder()
+                        .isbn(request.getIsbn())
+                        .title(title)
+                        .author(author)
+                        .publisher(request.getPublisher())
+                        .originalImage(request.getOriginalImage())
+                        .generatedImage(finalGeneratedImage)
+                        .description(description)
+                        .summary(result.summary())
+                        .creator(getCurrentUser())
+                        .build();
+                return bookRepository.save(book);
+            });
 
-            Book savedBook = bookRepository.save(book);
             log.info("Book card created with ID: {}", savedBook.getId());
-
             return savedBook;
 
         } finally {
@@ -278,11 +286,15 @@ public class BookService {
      * 북카드를 삭제한다.
      * 본인이 생성한 북카드만 삭제할 수 있으며, 연결된 이미지 파일도 함께 삭제한다.
      *
+     * 삭제 순서: DB 먼저 삭제 → 파일 삭제.
+     * DB 삭제가 실패하면 트랜잭션이 롤백되어 파일도 보존된다.
+     * 파일 삭제가 실패해도 고아 파일일 뿐, DB 정합성은 유지된다.
+     *
      * @param id 삭제할 북카드 ID
      * @throws IllegalArgumentException  북카드를 찾을 수 없는 경우
      * @throws AccessDeniedException     다른 사용자의 북카드를 삭제하려는 경우
      */
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public void deleteBook(Long id) {
         Book book = bookRepository.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("북카드를 찾을 수 없습니다: " + id));
@@ -292,12 +304,16 @@ public class BookService {
             throw new org.springframework.security.access.AccessDeniedException("본인이 생성한 북카드만 삭제할 수 있습니다");
         }
 
-        // 로컬에 저장된 이미지 파일도 함께 삭제
-        if (book.getGeneratedImage() != null) {
-            imageStorageService.delete(book.getGeneratedImage());
-        }
+        String imagePath = book.getGeneratedImage();
+
+        // DB 먼저 삭제 (실패 시 트랜잭션 롤백, 파일은 안전하게 보존)
         bookRepository.deleteById(id);
         log.info("Deleted book with ID: {}", id);
+
+        // DB 삭제 성공 후 파일 삭제 (실패해도 고아 파일일 뿐, 데이터 정합성 유지)
+        if (imagePath != null) {
+            imageStorageService.delete(imagePath);
+        }
     }
 
     /** ISBN으로 기존 북카드를 조회한다. SSE 오류 처리 시 중복 감지에도 활용된다. */
@@ -308,12 +324,12 @@ public class BookService {
 
     /**
      * 좋아요를 토글한다 (이미 좋아요 → 취소, 미좋아요 → 추가).
-     * 토글 후 DB에서 실시간으로 likeCount를 재집계하여 동기화한다.
+     * 토글 후 원자적 UPDATE 쿼리로 likeCount를 동기화하여 동시 요청 시 Lost Update를 방지한다.
      *
      * @param id 대상 북카드 ID
      * @return 토글 후의 좋아요 상태 및 카운트
      */
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public LikeResponse toggleLike(Long id) {
         Book book = bookRepository.findById(id)
                 .orElseThrow(() -> new RuntimeException("Book not found: " + id));
@@ -336,14 +352,15 @@ public class BookService {
             liked = true;
         }
 
-        // likeCount를 실제 카운트로 동기화 (race condition 방지)
+        // 원자적 UPDATE로 likeCount 동기화 (단일 SQL문으로 Race Condition 방지)
+        bookRepository.syncLikeCount(id);
+
+        // 동기화된 카운트를 조회하여 응답에 포함
         long count = bookLikeRepository.countByBook(book);
-        book.setLikeCount((int) count);
-        bookRepository.save(book);
 
         return LikeResponse.builder()
                 .bookId(book.getId())
-                .likeCount(book.getLikeCount())
+                .likeCount((int) count)
                 .liked(liked)
                 .build();
     }

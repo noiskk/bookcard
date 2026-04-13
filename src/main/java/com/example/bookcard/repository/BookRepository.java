@@ -49,11 +49,13 @@ public interface BookRepository extends JpaRepository<Book, Long> {
     Page<Book> findByCreatorOrderByCreatedAtDesc(User creator, Pageable pageable);
 
     /**
-     * 좋아요 수를 DB에서 원자적으로 1 증가
-     * 동시 요청 환경에서 Lost Update 없이 안전하게 카운트를 올린다.
-     * (현재는 bookLikeRepository.countByBook()으로 동기화하는 방식 사용)
+     * 좋아요 수를 book_likes 테이블의 실제 레코드 수로 원자적 동기화.
+     * 단일 UPDATE 문으로 실행되므로 동시 요청 시 Lost Update 문제가 발생하지 않는다.
+     * (기존 incrementLikeCount 대체: SELECT COUNT → SET 사이의 Race Condition 제거)
      */
     @Modifying
-    @Query("UPDATE Book b SET b.likeCount = b.likeCount + 1 WHERE b.id = :id")
-    void incrementLikeCount(@Param("id") Long id);
+    @Query("UPDATE Book b SET b.likeCount = " +
+           "(SELECT COUNT(bl) FROM BookLike bl WHERE bl.book.id = b.id) " +
+           "WHERE b.id = :id")
+    void syncLikeCount(@Param("id") Long id);
 }
