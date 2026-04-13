@@ -11,6 +11,7 @@ import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 /**
  * 인증 서비스
@@ -36,6 +37,7 @@ public class AuthService implements UserDetailsService {
      * @return JWT 토큰 + 이메일 + 닉네임
      * @throws IllegalArgumentException 이미 사용 중인 이메일인 경우
      */
+    @Transactional(rollbackFor = Exception.class)
     public AuthResponse register(RegisterRequest request) {
         if (userRepository.existsByEmail(request.getEmail())) {
             throw new IllegalArgumentException("이미 사용 중인 이메일입니다");

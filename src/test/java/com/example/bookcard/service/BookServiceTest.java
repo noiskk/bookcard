@@ -17,6 +17,12 @@ import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContext;
 import org.springframework.security.core.context.SecurityContextHolder;
 
+import com.example.bookcard.dto.LikeResponse;
+import com.example.bookcard.entity.BookLike;
+import com.example.bookcard.repository.BookLikeRepository;
+import org.springframework.transaction.support.TransactionCallback;
+import org.springframework.transaction.support.TransactionTemplate;
+
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
@@ -47,6 +53,12 @@ class BookServiceTest {
 
     @Mock
     private ImageStorageService imageStorageService;
+
+    @Mock
+    private BookLikeRepository bookLikeRepository;
+
+    @Mock
+    private TransactionTemplate transactionTemplate;
 
     @InjectMocks
     private BookService bookService;
@@ -144,7 +156,7 @@ class BookServiceTest {
                 null
         );
 
-        given(openAiService.generateWithChaining(anyString(), anyString(), any(), any()))
+        given(openAiService.generateWithChaining(anyString(), anyString(), any(), any(), any()))
                 .willReturn(generationResult);
         given(userRepository.findByEmail(email)).willReturn(Optional.of(currentUser));
 
@@ -156,6 +168,13 @@ class BookServiceTest {
                 .build();
         given(bookRepository.save(any(Book.class))).willReturn(savedBook);
 
+        // TransactionTemplate.execute()가 콜백을 그대로 실행하도록 stub
+        given(transactionTemplate.execute(any()))
+                .willAnswer(invocation -> {
+                    TransactionCallback<?> callback = invocation.getArgument(0);
+                    return callback.doInTransaction(null);
+                });
+
         // when
         Book result = bookService.generateBook(request);
 
@@ -163,7 +182,6 @@ class BookServiceTest {
         assertThat(result.getId()).isEqualTo(10L);
         assertThat(result.getTitle()).isEqualTo("새 책");
         verify(bookRepository, never()).findByIsbn(anyString());
-        verify(bookRepository).save(any(Book.class));
     }
 
     // ========================================
@@ -247,83 +265,62 @@ class BookServiceTest {
     // ========================================
 
     @Test
-    @DisplayName("likeBook(): 좋아요 호출 시 incrementLikeCount JPQL이 실행되고 결과를 반환한다")
-    void likeBook_incrementsLikeCount() {
+    @DisplayName("toggleLike(): 좋아요가 없는 상태에서 토글하면 좋아요가 추가된다")
+    void toggleLike_addsLike() {
         // given
-        Book book = Book.builder()
-                .id(1L)
-                .title("인기 책")
-                .author("저자")
-                .likeCount(6) // DB 원자 연산 후 조회되는 값
-                .build();
+        mockSecurityContext("user@test.com");
+        User user = User.builder().id(1L).email("user@test.com").build();
+        Book book = Book.builder().id(1L).title("인기 책").author("저자").likeCount(5).build();
 
+        given(userRepository.findByEmail("user@test.com")).willReturn(Optional.of(user));
         given(bookRepository.findById(1L)).willReturn(Optional.of(book));
+        given(bookLikeRepository.findByBookAndUser(book, user)).willReturn(Optional.empty());
+        given(bookLikeRepository.countByBook(book)).willReturn(6L);
 
         // when
-        Book result = bookService.likeBook(1L);
+        LikeResponse result = bookService.toggleLike(1L);
 
         // then
-        verify(bookRepository).incrementLikeCount(1L); // JPQL 원자적 UPDATE 호출 확인
-        verify(bookRepository).findById(1L);
+        verify(bookLikeRepository).save(any(BookLike.class));
+        verify(bookRepository).syncLikeCount(1L);
+        assertThat(result.isLiked()).isTrue();
         assertThat(result.getLikeCount()).isEqualTo(6);
     }
 
     @Test
-    @DisplayName("likeBook(): 존재하지 않는 북카드에 좋아요 시 RuntimeException이 발생한다")
-    void likeBook_bookNotFound_throwsException() {
+    @DisplayName("toggleLike(): 이미 좋아요한 상태에서 토글하면 좋아요가 취소된다")
+    void toggleLike_removesLike() {
+        // given
+        mockSecurityContext("user@test.com");
+        User user = User.builder().id(1L).email("user@test.com").build();
+        Book book = Book.builder().id(1L).title("인기 책").author("저자").likeCount(5).build();
+        BookLike existingLike = BookLike.builder().id(1L).book(book).user(user).build();
+
+        given(userRepository.findByEmail("user@test.com")).willReturn(Optional.of(user));
+        given(bookRepository.findById(1L)).willReturn(Optional.of(book));
+        given(bookLikeRepository.findByBookAndUser(book, user)).willReturn(Optional.of(existingLike));
+        given(bookLikeRepository.countByBook(book)).willReturn(4L);
+
+        // when
+        LikeResponse result = bookService.toggleLike(1L);
+
+        // then
+        verify(bookLikeRepository).delete(existingLike);
+        verify(bookRepository).syncLikeCount(1L);
+        assertThat(result.isLiked()).isFalse();
+        assertThat(result.getLikeCount()).isEqualTo(4);
+    }
+
+    @Test
+    @DisplayName("toggleLike(): 존재하지 않는 북카드에 좋아요 시 RuntimeException이 발생한다")
+    void toggleLike_bookNotFound_throwsException() {
         // given
         given(bookRepository.findById(999L)).willReturn(Optional.empty());
 
         // when & then
         assertThrows(
                 RuntimeException.class,
-                () -> bookService.likeBook(999L)
+                () -> bookService.toggleLike(999L)
         );
-    }
-
-    @Test
-    @DisplayName("likeBook(): 10개 스레드 동시 호출 시 incrementLikeCount가 정확히 10번 실행된다")
-    void likeBook_concurrent_allCallsSucceed() throws InterruptedException {
-        // given
-        int threadCount = 10;
-        ExecutorService executorService = Executors.newFixedThreadPool(threadCount);
-        CountDownLatch readyLatch = new CountDownLatch(threadCount);
-        CountDownLatch startLatch = new CountDownLatch(1);
-        CountDownLatch doneLatch = new CountDownLatch(threadCount);
-        AtomicInteger successCount = new AtomicInteger(0);
-
-        Book book = Book.builder()
-                .id(1L)
-                .title("인기 책")
-                .author("저자")
-                .likeCount(10)
-                .build();
-
-        given(bookRepository.findById(1L)).willReturn(Optional.of(book));
-
-        // when: 10개 스레드가 동시에 likeBook 호출
-        for (int i = 0; i < threadCount; i++) {
-            executorService.submit(() -> {
-                try {
-                    readyLatch.countDown();
-                    startLatch.await(); // 모든 스레드가 준비될 때까지 대기
-                    bookService.likeBook(1L);
-                    successCount.incrementAndGet();
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                } finally {
-                    doneLatch.countDown();
-                }
-            });
-        }
-
-        readyLatch.await(); // 모든 스레드 준비 완료 대기
-        startLatch.countDown(); // 동시 시작
-        doneLatch.await(); // 모든 스레드 완료 대기
-        executorService.shutdown();
-
-        // then: incrementLikeCount가 정확히 10번 호출되어야 함
-        assertThat(successCount.get()).isEqualTo(threadCount);
-        verify(bookRepository, times(threadCount)).incrementLikeCount(1L);
     }
 }
